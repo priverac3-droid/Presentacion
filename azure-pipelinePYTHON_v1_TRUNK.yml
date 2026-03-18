@@ -1,0 +1,156 @@
+# =============================================================================
+# VARIABLES Y RECURSOS
+# =============================================================================
+variables:
+  # variable de grupo de artifactory
+  - group: Artifactory  
+  # Propiedad del sonarQube para indicar el directorio a analizar
+  - name: sonarSources
+    value: 'src'
+  # propiedad de sonarQube para indicar los directorios a excluir en el análisis
+  - name: sonarExclusions
+    value: 'test/*,mocks/*'
+  # propiedad de sonarQube para indicar el directorio donde se encontrara el reporte de covertura
+  - name: sonarCoveragePaths
+    value: '$(System.DefaultWorkingDirectory)/coverage.xml'
+  # Nombre del service connection para tarea de sonarQube
+  - name: sonarQubeServiceEndpoint
+    value: 'SonarLts'
+  # nombre del script de pruebas unitarias
+  - name: unitTestCommand
+    value: 'coverage run -m pytest && coverage xml --omit=./venv/* && mkdir coverage && cp ./coverage.xml ./coverage/coverage.xml'
+  # Dependencias a instalar
+  - name: path_dependencies_file
+    value: 'requirements.txt'
+  # Versión que se descargará en el agente temporalmente
+  - name: versionPython
+    value: '3.12'
+  
+  # --- VARIABLES DE DESPLIEGUE AWS (NUEVAS) ---
+  - name: awsServiceConnection
+    value: 'AWS-Service-Connection-Dev' # <<< CAMBIAR ESTO POR TU CONEXION REAL
+  - name: bucketArtefactos
+    value: 'b1-useast1-devops-artifacts-507781971948' # <<< TU BUCKET DE ARTEFACTOS
+  - name: envName
+    value: 'dev3'
+
+resources:
+  repositories:
+    - repository: template
+      type: git
+      name: DevOps/_git/templates-yaml
+      ref: 'refs/heads/master' # indicamos la rama que apuntamos en el repositorios template-yaml, siempre debemos apuntar a master
+
+trigger:
+  - trunk
+
+name: $(date:yyyyMMdd)$(rev:.r)
+
+# =============================================================================
+# STAGES (ETAPAS)
+# =============================================================================
+stages:
+
+# -----------------------------------------------------------------------------
+# ETAPA 1: CI (INTEGRACIÓN CONTINUA)
+# -----------------------------------------------------------------------------
+- stage: Build_And_Test
+  displayName: 'Compilación y Pruebas'
+  jobs:
+  - job: CI
+    pool: 
+      name: Docker-Agents
+    workspace:
+      clean: all
+    steps:
+    - template: build_PYTHON_v1.yml@template #ref de template en otro repository de pasos de CI
+      parameters:
+        sonarCoveragePaths: ${{variables.sonarCoveragePaths}}
+        sonarExclusions: ${{variables.sonarExclusions}}
+        sonarSources: ${{variables.sonarSources}}
+        sonarQubeServiceEndpoint: ${{variables.sonarQubeServiceEndpoint}}   
+        unitTestCommand: ${{variables.unitTestCommand}}
+        path_dependencies_file: ${{variables.path_dependencies_file}}
+        versionPython: ${{variables.versionPython}}
+        installLZ: false
+    
+    # Empaquetado estándar corporativo (.tar.gz)
+    - task: ArchiveFiles@1
+      displayName: 'Preparando artefacto a publicar'
+      inputs:
+        rootFolder: '$(Build.Repository.LocalPath)'
+        includeRootFolder: false
+        archiveType: tar
+        archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).tar.gz'
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publicando artefacto'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).tar.gz'
+        ArtifactName: artifact
+
+# -----------------------------------------------------------------------------
+# ETAPA 2: CD (DESPLIEGUE AWS)
+# -----------------------------------------------------------------------------
+- stage: Deploy_AWS
+  displayName: 'Despliegue a AWS'
+  dependsOn: Build_And_Test
+  condition: succeeded() # Solo corre si el CI pasó
+  jobs:
+  - job: Deploy
+    pool: 
+      name: Docker-Agents
+    steps:
+    # 1. DESCARGAR EL ARTEFACTO DEL STAGE ANTERIOR
+    - download: current
+      artifact: artifact
+      displayName: 'Descargar Artefacto'
+
+    # 2. PREPARAR EL ZIP PARA LAMBDA
+    # Explicación: Tu CI crea un .tar.gz con TODO el repo. 
+    # Lambda necesita un .zip solo con el contenido de 'src'.
+    - script: |
+        echo "--> Extrayendo Artefacto Corporativo..."
+        mkdir $(Pipeline.Workspace)/source
+        tar -xzf $(Pipeline.Workspace)/artifact/$(Build.BuildId).tar.gz -C $(Pipeline.Workspace)/source
+        
+        echo "--> Creando ZIP específico para Lambda..."
+        # Entramos a src y zipeamos el contenido
+        cd $(Pipeline.Workspace)/source/src
+        zip -r $(Pipeline.Workspace)/lambda-deploy.zip .
+        
+        echo "--> ZIP generado en: $(Pipeline.Workspace)/lambda-deploy.zip"
+      displayName: 'Reempaquetar código para Lambda'
+
+    # 3. DESPLIEGUE CLOUDFORMATION
+    - task: AzureCLI@2
+      displayName: 'Ejecutar Despliegue AWS'
+      inputs:
+        awsCredentials: '$(awsServiceConnection)'
+        regionName: 'us-east-1'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Variables
+          STACK_NAME="ACH-Replicacion-$(envName)"
+          ZIP_FILE="lambda-code-$(Build.BuildId).zip"
+          S3_KEY="ach-datasync/lambda/$ZIP_FILE"
+          
+          echo "------------------------------------------------"
+          echo " DESPLEGANDO STACK: $STACK_NAME"
+          echo "------------------------------------------------"
+
+          # A) Subir el ZIP recién creado a S3
+          aws s3 cp $(Pipeline.Workspace)/lambda-deploy.zip s3://$(bucketArtefactos)/$S3_KEY
+
+          # B) Ejecutar CloudFormation
+          # Nota: Usamos la ruta extraída $(Pipeline.Workspace)/source/infra/...
+          aws cloudformation deploy \
+            --template-file $(Pipeline.Workspace)/source/infra/ach-datasync-master.yaml \
+            --stack-name $STACK_NAME \
+            --parameter-overrides \
+                file://$(Pipeline.Workspace)/source/infra/parameters/params-$(envName).json \
+                BucketCodigoLambda=$(bucketArtefactos) \
+                KeyCodigoLambda=$S3_KEY \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset

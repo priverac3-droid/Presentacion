@@ -1,0 +1,32 @@
+PRERREQUISITO CRÍTICO: Política del Bucket Origen
+Esto es OBLIGATORIO. Si no se hace esto, cuando se intente correr DataSync desde QA, AWS dirá "Access Denied" porque la cuenta de Desarrollo (dueña de los datos) no conoce a la cuenta de QA.
+
+Acción: Debe ir a la cuenta de Desarrollo (507781971948), buscar el bucket dev3-integrations-t1-batch-outputfiledirectory-507781971948, ir a la pestaña Permissions -> Bucket Policy y agregar/pegar esto:
+
+JSON
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "PermitirLecturaCrossAccountACH",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": [
+                    "arn:aws:iam::462297762050:root",  
+                    "arn:aws:iam::817987897650:root"   
+                ]
+            },
+            "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+                "s3:GetObject",
+                "s3:GetObjectTagging"
+            ],
+            "Resource": [
+                "arn:aws:s3:::dev3-integrations-t1-batch-outputfiledirectory-507781971948",
+                "arn:aws:s3:::dev3-integrations-t1-batch-outputfiledirectory-507781971948/*"
+            ]
+        }
+    ]
+}
+Explicación: Esta política dice: "Yo, Bucket de Desarrollo, autorizo a las cuentas de QA (...050) y Prod (...650) a leer mis archivos".

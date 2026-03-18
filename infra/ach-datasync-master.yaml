@@ -1,0 +1,480 @@
+# =============================================================================
+# NOMBRE DEL ARCHIVO: ach-datasync-master.yaml
+# PROYECTO: Migración y Respaldo Transversal ACH (Arquitectura Sidecar)
+# AUTOR: Equipo de Arquitectura Cloud / Desarrollo
+# DESCRIPCIÓN: Plantilla Maestra (Master Template) para despliegue Multi-Cuenta.
+# ESTÁNDAR: Control Tower Compliant (Sin Wildcards, Encriptado KMS, Auditado).
+# =============================================================================
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  [PROYECTO ACH] Infraestructura de replicación S3-to-S3 usando AWS DataSync.
+  Incluye: Bóveda S3 (Con ciclo de vida), Llaves KMS (Seguridad Bancaria),
+  Roles IAM (Least Privilege) y Monitoreo (SNS/EventBridge).
+  Soporta despliegue en Dev (Pruebas), QA y Producción.
+
+# =============================================================================
+# SECCIÓN 0: MAPEOS Y LÓGICA DE NOMBRES
+# PROPÓSITO: Estandarizar abreviaturas de región para cumplir la norma del banco.
+# =============================================================================
+Mappings:
+  RegionMap:
+    # Si desplegamos en Virginia -> "useast1"
+    us-east-1:
+      ShortName: "useast1"
+    # Si desplegamos en Oregón -> "uswest2"
+    us-west-2:
+      ShortName: "uswest2"
+
+# =============================================================================
+# SECCIÓN 1: EL CONTRATO DE ENTRADA (PARÁMETROS)
+# PROPÓSITO: Definir las variables que cambian entre Desarrollo, QA y Producción.
+# =============================================================================
+Parameters:
+
+  # --- 1.1. IDENTIDAD DEL AMBIENTE -------------------------------------------
+  AmbienteDespliegue:
+    Type: String
+    Description: >
+      Define el entorno de despliegue. Este valor es CRÍTICO para el nombrado.
+      Opciones: 'dev3' (Desarrollo), 'qa03' (Calidad), 'pdn' (Producción).
+    AllowedValues: [dev3, qa03, pdn]
+    ConstraintDescription: Debe ser uno de los valores estándar: dev3, qa03, pdn.
+
+  CuentaDestinoID:
+    Type: String
+    Description: >
+      ID de la cuenta AWS de 12 dígitos donde se crearán los recursos.
+      QA: 462297762050 | PROD: 817987897650
+    AllowedPattern: '^\d{12}$'
+
+  # --- 1.2. CONFIGURACIÓN DE RED (SEGURIDAD PRIVADA) -------------------------
+  # DataSync necesita una interfaz de red (ENI) para no salir a internet público.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: ID de la VPC donde residirá el Agente DataSync (ej. vpc-xxxxxxxx).
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID de la Subred Privada con acceso a Endpoints S3 (ej. subnet-xxxxxxxx).
+
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: ID del Grupo de Seguridad para el ENI de DataSync (ej. sg-xxxxxxxx).
+
+  # --- 1.3. ALERTAS Y NOTIFICACIONES -----------------------------------------
+  EmailNotificaciones:
+    Type: String
+    Description: Correo electrónico del responsable que recibirá alertas de fallo (SNS).
+    AllowedPattern: '^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
+
+  # --- 1.4. CONSTANTES DEL ORIGEN (NO CAMBIAR) -------------------------------
+  BucketOrigenArn:
+    Type: String
+    Default: "arn:aws:s3:::dev3-integrations-t1-batch-outputfiledirectory-507781971948"
+    Description: ARN Fijo del Bucket Fuente en la cuenta de Desarrollo.
+
+  RutaOrigenACH:
+    Type: String
+    Default: "/replication/ACH/"
+    Description: Ruta base específica en el Origen que contiene la información a migrar.
+
+  # --- 1.5. CONFIGURACIÓN DEL DESTINO (FLEXIBILIDAD) -------------------------
+  RutaDestinoACH:
+    Type: String
+    Default: "/replication/ACH/"
+    Description: >
+      Carpeta donde caerán los datos en el nuevo bucket.
+      - Para QA/PROD: Dejar '/replication/ACH/' (Estándar).
+      - Para DEV: Cambiar a '/RESPALDO_PRUEBA/' para distinguirlo del original.
+  # --- 1.6. PARÁMETROS PARA LA LAMBDA ----------------------
+  BucketCodigoLambda:
+    Type: String
+    Description: "Nombre del bucket S3 donde el pipeline subió el .zip de la Lambda"
+
+  KeyCodigoLambda:
+    Type: String
+    Description: "Ruta y nombre del archivo .zip dentro del bucket (ej. lambda/codigo.zip)"
+
+# =============================================================================
+# SECCIÓN 2: INFRAESTRUCTURA DE SEGURIDAD (KMS & S3)
+# PROPÓSITO: Crear la "Bóveda" y el "Candado".
+# =============================================================================
+Resources:
+
+  # ---------------------------------------------------------------------------
+  # 2.1. LLAVE DE ENCRIPTACIÓN (KMS - CUSTOMER MANAGED KEY)
+  # EXPLICACIÓN: Bancos exigen llaves propias, no las compartidas de AWS.
+  # Esta llave cifra los datos en reposo y protege la transferencia.
+  # ---------------------------------------------------------------------------
+  KmsKeyReplicacion:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "Llave Maestra ACH para entorno ${AmbienteDespliegue}"
+      Enabled: true
+      EnableKeyRotation: true # REQUISITO: La llave rota material criptográfico cada año.
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: key-policy-ach
+        Statement:
+          # Permiso "Anti-Lockout": El usuario Root siempre mantiene control.
+          - Sid: "PermitirAdministracionRoot"
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+
+  # Alias para encontrar la llave fácilmente en la consola
+  KmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/ach-key-${AmbienteDespliegue}"
+      TargetKeyId: !Ref KmsKeyReplicacion
+
+  # ---------------------------------------------------------------------------
+  # 2.2. BUCKET S3 DE DESTINO (LA BÓVEDA)
+  # ESTÁNDAR DE NOMBRE: b1-[region]-[amb]-coreb-backuptransversal-[cuenta]
+  # ---------------------------------------------------------------------------
+  BucketDestinoACH:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Construcción dinámica del nombre según la Región y el Ambiente
+      BucketName: !Sub 
+        - "b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+        - RegionShort: !FindInMap [RegionMap, !Ref "AWS::Region", ShortName]
+      
+      # SEGURIDAD 1: Bloqueo TOTAL de Acceso Público (Control Tower Requirement)
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      # SEGURIDAD 2: Encriptación Forzada con nuestra llave KMS
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "aws:kms"
+              KMSMasterKeyID: !Ref KmsKeyReplicacion
+            BucketKeyEnabled: true # Reduce costos de llamadas a KMS
+
+      # SEGURIDAD 3: Propiedad Absoluta (Ownership Enforced)
+      # La cuenta destino se vuelve dueña de los archivos, ignorando al creador original.
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+      # OPTIMIZACIÓN DE COSTOS (LIFECYCLE POLICY)
+      # Estrategia: Mantener en Standard 90 días -> Mover a Glacier (Ahorro 90%)
+      LifecycleConfiguration:
+        Rules:
+          - Id: "Transicion-Ahorro-Glacier"
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+            ExpirationInDays: 2555 # Purga automática legal a los 7 años
+
+      Tags:
+        - Key: Proyecto
+          Value: "Migracion ACH"
+        - Key: Ambiente
+          Value: !Ref AmbienteDespliegue
+
+# =============================================================================
+# SECCIÓN 3: IDENTIDAD Y PERMISOS (IAM)
+# PROPÓSITO: Definir QUÉ puede hacer el motor de migración.
+# =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # 3.1. GRUPO DE LOGS (AUDITORÍA)
+  # ---------------------------------------------------------------------------
+  DataSyncLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/datasync/ach-migration-${AmbienteDespliegue}"
+      RetentionInDays: 14 # Guardamos logs por 2 semanas para auditoría operativa
+
+  # ---------------------------------------------------------------------------
+  # 3.2. ROL DE DATASYNC (PRINCIPIO DE MENOR PRIVILEGIO)
+  # EXPLICACIÓN: Este rol tiene permisos quirúrgicos. Puede leer el origen,
+  # pero NO puede borrar nada allí. Solo escribe en el destino.
+  # ---------------------------------------------------------------------------
+  DataSyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ach-datasync-role-${AmbienteDespliegue}-${AWS::Region}"
+      Description: Rol asumido por DataSync para replicación segura S3-to-S3.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: "datasync.amazonaws.com" }
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: DataSyncOperaciones
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # A) PERMISOS ORIGEN (DEV3) - SOLO LECTURA
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                Resource: !Ref BucketOrigenArn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectTagging
+                Resource: !Sub "${BucketOrigenArn}/*"
+
+              # B) PERMISOS DESTINO (DEV/QA/PROD) - ESCRITURA Y VERIFICACIÓN
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:AbortMultipartUpload
+                  - s3:PutObject
+                  - s3:PutObjectTagging
+                  - s3:GetObject        # Necesario para verificar Checksums
+                  - s3:GetObjectTagging
+                Resource: 
+                  - !GetAtt BucketDestinoACH.Arn
+                  - !Sub "${BucketDestinoACH.Arn}/*"
+
+              # C) PERMISOS CRIPTOGRÁFICOS (KMS)
+              - Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                  - kms:Encrypt
+                Resource: !GetAtt KmsKeyReplicacion.Arn
+
+              # D) PERMISOS DE LOGGING
+              - Effect: Allow
+                Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                Resource: !GetAtt DataSyncLogGroup.Arn
+
+# =============================================================================
+# SECCIÓN 4: EL MOTOR DE MIGRACIÓN (DATASYNC)
+# PROPÓSITO: Configurar la Tarea, el Horario y la Inteligencia de Copia.
+# =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # 4.1. LOCATION ORIGEN (PUNTO A)
+  # ---------------------------------------------------------------------------
+  LocationOrigen:
+    Type: AWS::DataSync::LocationS3
+    Properties:
+      S3BucketArn: !Ref BucketOrigenArn
+      Subdirectory: !Ref RutaOrigenACH
+      S3Config:
+        BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
+      Tags:
+        - Key: Tipo
+          Value: Origen-Dev3
+
+  # ---------------------------------------------------------------------------
+  # 4.2. LOCATION DESTINO (PUNTO B)
+  # NOTA: Aquí usamos el parámetro 'RutaDestinoACH' para permitir flexibilidad.
+  # ---------------------------------------------------------------------------
+  LocationDestino:
+    Type: AWS::DataSync::LocationS3
+    Properties:
+      S3BucketArn: !GetAtt BucketDestinoACH.Arn
+      Subdirectory: !Ref RutaDestinoACH # <--- EL CAMBIO CLAVE
+      S3Config:
+        BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
+      Tags:
+        - Key: Tipo
+          Value: !Sub "Destino-${AmbienteDespliegue}"
+
+  # ---------------------------------------------------------------------------
+  # 4.3. TAREA DE REPLICACIÓN (EL CEREBRO)
+  # Lógica: Batch diario a las 02:00 AM. Verifica integridad antes de copiar.
+  # ---------------------------------------------------------------------------
+  DataSyncTask:
+    Type: AWS::DataSync::Task
+    Properties:
+      Name: !Sub "migracion-ach-${AmbienteDespliegue}"
+      SourceLocationArn: !Ref LocationOrigen
+      DestinationLocationArn: !Ref LocationDestino
+      CloudWatchLogGroupArn: !GetAtt DataSyncLogGroup.Arn
+      
+      # PROGRAMACIÓN (CRON JOB)
+      Schedule:
+        ScheduleExpression: "cron(0 2 * * ? *)" # Ejecutar a las 02:00 AM UTC
+
+      # REGLAS DE NEGOCIO (OPTIONS)
+      Options:
+        # 1. INTEGRIDAD: Si el archivo ya existe y el hash coincide, LO SALTA.
+        VerifyMode: POINT_IN_TIME_CONSISTENT
+        
+        # 2. SOBRESCRITURA: Si el archivo cambió en origen, se actualiza en destino.
+        OverwriteMode: ALWAYS
+        
+        # 3. SEGURIDAD: Si borran en origen, NO borramos en destino (Backup Histórico).
+        PreserveDeletedFiles: PRESERVE
+        
+        # 4. THROTTLING: Limite de ancho de banda (50 MB/s) para no saturar la red.
+        BytesPerSecond: 52428800
+        LogLevel: BASIC
+
+# =============================================================================
+# SECCIÓN 5: VIGILANCIA Y ALERTAS (SNS + EVENTBRIDGE)
+# PROPÓSITO: El "Botón de Pánico". Avisar solo si algo falla.
+# =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # 5.1. CANAL DE COMUNICACIÓN (TOPIC SNS)
+  # ---------------------------------------------------------------------------
+  SnsTopicAlertas:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "ach-alertas-falla-${AmbienteDespliegue}"
+      DisplayName: !Sub "Alerta Crítica ACH ${AmbienteDespliegue}"
+
+  # ---------------------------------------------------------------------------
+  # 5.2. SUSCRIPCIÓN DE CORREO
+  # ---------------------------------------------------------------------------
+  SnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref SnsTopicAlertas
+      Protocol: email
+      Endpoint: !Ref EmailNotificaciones
+
+  # ---------------------------------------------------------------------------
+  # 5.3. PERMISOS DEL TOPIC
+  # ---------------------------------------------------------------------------
+  SnsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref SnsTopicAlertas
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: "PermitirEventBridgePublicar"
+            Effect: Allow
+            Principal: { Service: "events.amazonaws.com" }
+            Action: "sns:Publish"
+            Resource: !Ref SnsTopicAlertas
+
+  # ---------------------------------------------------------------------------
+  # 5.4. REGLA DE EVENTOS (EL VIGILANTE)
+  # Lógica: Escucha eventos de DataSync. Si State == ERROR, dispara el correo.
+  # ---------------------------------------------------------------------------
+  DataSyncFailureRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "ach-monitoreo-fallas-${AmbienteDespliegue}"
+      Description: "Dispara alerta inmediata si la tarea de DataSync falla."
+      EventPattern:
+        source: ["aws.datasync"]
+        detail-type: ["DataSync Task Execution State Change"]
+        detail:
+          State: ["ERROR"] # Solo nos interesa el error
+      Targets:
+        - Arn: !Ref SnsTopicAlertas
+          Id: "EnviarEmailSoporte"
+          InputTransformer:
+            # Formateo del mensaje para que sea legible en el celular
+            InputPathsMap:
+              tarea: "$.detail.TaskArn"
+              error: "$.detail.Result"
+            InputTemplate: |
+              "ALERTA DE SEGURIDAD - PROYECTO ACH
+              ------------------------------------------------
+              La tarea de replicación ha reportado un FALLO CRÍTICO.
+              
+              Tarea ID: <tarea>
+              Detalle del Error: <error>
+              
+              Acción Requerida: Revise la consola AWS DataSync de inmediato."
+
+# ---------------------------------------------------------------------------
+# SECCIÓN 6: ORQUESTADOR (LAMBDA) - ¡NUEVO!
+# PROPÓSITO: Gatillar la tarea de DataSync bajo demanda o por eventos complejos.
+  # PRINCIPIO DE SEGURIDAD: Least Privilege (Menor Privilegio Posible).
+  # ---------------------------------------------------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # Nombre predecible para fácil auditoría en la consola de IAM
+      RoleName: !Sub "ach-lambda-role-${AmbienteDespliegue}-${AWS::Region}"
+      
+      # Relación de Confianza: Solo el servicio Lambda puede "ponerse" este traje (Role)
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+            
+      Policies:
+        - PolicyName: "DataSyncExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # A) PERMISO DE LOGS
+              # Necesario para que la Lambda escriba en CloudWatch (debugging).
+              # Si esto falta, la Lambda fallará silenciosamente.
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+                
+              # B) PERMISO DE EJECUCIÓN DATASYNC
+              # Crítico: Solo permitimos "StartTaskExecution".
+              # Seguridad: Restringimos el "Resource" explícitamente a la tarea 
+              # creada en este template (!Ref DataSyncTask). 
+              # La Lambda NO podrá disparar otras tareas de la cuenta.
+              - Effect: Allow
+                Action: "datasync:StartTaskExecution"
+                Resource: !Ref DataSyncTask
+
+  # ---------------------------------------------------------------------------
+  # 6.2. FUNCIÓN LAMBDA (CÓDIGO PYTHON)
+  # ---------------------------------------------------------------------------
+  OrquestadorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "ach-datasync-trigger-${AmbienteDespliegue}"
+      Description: "Orquestador que dispara la replicación DataSync."
+      
+      # Runtime moderno y seguro (Python 3.12 es la versión estable actual en AWS)
+      Runtime: python3.12
+      
+      # Apunta al archivo 'index.py' y a la función 'lambda_handler' dentro de él
+      Handler: index.lambda_handler
+      
+      # Asignamos el Rol definido arriba en el punto 6.1
+      Role: !GetAtt LambdaExecutionRole.Arn
+      
+      # Timeout: 60 segundos es más que suficiente para una llamada API.
+      # (La llamada start_task_execution tarda milisegundos).
+      Timeout: 60
+      MemorySize: 128 # Mínima memoria necesaria (ahorro de costos)
+      
+      # DEFINICIÓN DEL CÓDIGO FUENTE (CI/CD)
+      # No pegamos el código aquí (Inline) porque es una mala práctica para producción.
+      # Usamos las referencias al Bucket S3 donde el Pipeline subió el ZIP.
+      Code:
+        S3Bucket: !Ref BucketCodigoLambda  # Parámetro inyectado al desplegar
+        S3Key: !Ref KeyCodigoLambda        # Ruta del archivo ZIP generada por el BuildId
+      
+      # VARIABLES DE ENTORNO
+      # Inyectamos configuración dinámica para que el código Python no tenga nada "quemado".
+      Environment:
+        Variables:
+          # El código Python leerá os.environ['DATASYNC_TASK_ARN']
+          # Esto garantiza que la Lambda siempre dispare la tarea correcta de su ambiente.
+          DATASYNC_TASK_ARN: !Ref DataSyncTask

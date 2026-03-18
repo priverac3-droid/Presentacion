@@ -1,0 +1,38 @@
+[
+  {
+    "ParameterKey": "AmbienteDespliegue",
+    "ParameterValue": "pdn"
+  },
+  {
+    "ParameterKey": "CuentaDestinoID",
+    "ParameterValue": "817987897650"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "<<<< BUSCAR EN CONSOLA DE PRODUCCIÓN >>>>"
+  },
+  {
+    "ParameterKey": "SubnetId",
+    "ParameterValue": "<<<< BUSCAR EN CONSOLA DE PRODUCCIÓN >>>>"
+  },
+  {
+    "ParameterKey": "SecurityGroupId",
+    "ParameterValue": "<<<< BUSCAR EN CONSOLA DE PRODUCCIÓN >>>>"
+  },
+  {
+    "ParameterKey": "EmailNotificaciones",
+    "ParameterValue": "paul.rivera@banistmo.com"
+  },
+  {
+    "ParameterKey": "RutaDestinoACH",
+    "ParameterValue": "/replication/ACH/"
+  },
+  {
+    "ParameterKey": "BucketCodigoLambda",
+    "ParameterValue": "ESTE_VALOR_LO_CAMBIA_EL_PIPELINE_AUTOMATICAMENTE"
+  },
+  {
+    "ParameterKey": "KeyCodigoLambda",
+    "ParameterValue": "ESTE_VALOR_LO_CAMBIA_EL_PIPELINE_AUTOMATICAMENTE"
+  }
+]
