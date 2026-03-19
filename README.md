@@ -204,74 +204,59 @@ crear buckets nuevos. No se fuerza por defecto porque es irreversible.
 | `TaskReportSubdirectory` | Ruta de reportes |
 | `OrchestratorSecretArn` | Secreto opcional del orquestador |
 
-## 10. Despliegue manual
+## 10. Flujo oficial de despliegue
 
-Antes de ejecutar un despliegue manual:
+El flujo operativo oficial de este desarrollo es:
 
-1. sube el ZIP de Lambda a un bucket de artefactos en la misma region del stack
-2. usa la key real publicada, por ejemplo `ach-datasync/lambda/lambda-code-<BuildId>.zip`
+1. correr el pipeline `azure-pipelinePYTHON_v1_TRUNK.yml`
+2. validar que el build publique correctamente el artefacto
+3. desplegar usando el release clasico de Azure DevOps
 
-### dev3
+Este repositorio mantiene ese modelo. El YAML del pipeline queda dedicado a:
 
-#### Virginia
+- instalar dependencias
+- ejecutar pruebas
+- correr SonarQube
+- generar coverage
+- empaquetar el repo como artefacto
 
-```bash
-export AWS_PROFILE=507781971948_BI-FSDEVELOPERROLE-QAPR
+El despliegue a AWS no se hace desde el YAML de build, sino desde el release.
 
-aws cloudformation deploy \
-  --template-file infra/ach-datasync-master.yaml \
-  --stack-name ACH-Replicacion-dev3 \
-  --parameter-overrides file://infra/parameters/params-dev3.json \
-  BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-  KeyCodigoLambda="ach-datasync/lambda/lambda-code-<BuildId>.zip" \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-east-1
-```
+### Release clasico esperado
 
-#### Oregon
+Las etapas actualmente asociadas al proceso de despliegue son las del release
+corporativo, por ejemplo:
 
-```bash
-export AWS_PROFILE=507781971948_BI-FSDEVELOPERROLE-QAPR
+- `INT-DEPLOY`
+- `QA-DEPLOY`
+- `PROD-DEPLOY`
+- validaciones manuales / rollback
 
-aws cloudformation deploy \
-  --template-file infra/ach-datasync-master.yaml \
-  --stack-name ACH-Replicacion-dev3 \
-  --parameter-overrides file://infra/parameters/params-dev3.json \
-  BucketCodigoLambda="b1-uswest2-devops-artifacts-507781971948" \
-  KeyCodigoLambda="ach-datasync/lambda/lambda-code-<BuildId>.zip" \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-west-2
-```
+### Que ya quedo probado
 
-### qa03
+- el pipeline compila y genera el artefacto
+- el release ya paso correctamente en dev
 
-```bash
-export AWS_PROFILE=462297762050_BI-FSDEVELOPERROLE-QAPR
+Por eso los cambios del repositorio se mantuvieron compatibles con el modelo
+`pipeline -> release`, sin mover el despliegue operativo al YAML de CI.
 
-aws cloudformation deploy \
-  --template-file infra/ach-datasync-master.yaml \
-  --stack-name ACH-Replicacion-qa03 \
-  --parameter-overrides file://infra/parameters/params-qa03.json \
-  BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-  KeyCodigoLambda="ach-datasync/lambda/lambda-code-<BuildId>.zip" \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-east-1
-```
+### Que no hace falta cambiar ahora en el release
 
-### pdn
+Si dev ya desplego bien con el release actual, no hace falta tocar de inmediato:
 
-```bash
-export AWS_PROFILE=817987897650_BI-FSDEVELOPERROLE-QAPR
+- la secuencia general del release
+- las aprobaciones manuales
+- los stages actuales de dev / qa / prod
 
-aws cloudformation deploy \
-  --template-file infra/ach-datasync-master.yaml \
-  --stack-name ACH-Replicacion-pdn \
-  --parameter-overrides file://infra/parameters/params-pdn.json \
-  BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-  KeyCodigoLambda="ach-datasync/lambda/lambda-code-<BuildId>.zip" \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-east-1
-```
+### Que si habria que cambiar mas adelante si quieren multi-region desde release
+
+Eso no es obligatorio para continuar con el flujo actual, pero si luego quieren
+desplegar tambien a `us-west-2` desde el release, habria que agregar en el
+release clasico:
+
+- variables por region para bucket de artefactos
+- una subida del ZIP por cada region
+- una ejecucion adicional de `Create/Update Stack` por region
 
 ## 11. Ejecucion operativa
 
@@ -319,15 +304,16 @@ aws lambda invoke \
 No requiere invocacion manual cuando `EnableDailySchedule=true`, porque
 EventBridge ejecuta la Lambda con el cron configurado en `ScheduleExpressionDaily`.
 
-## 12. Pipeline
+## 12. Pipeline de build
 
 El pipeline `azure-pipelinePYTHON_v1_TRUNK.yml`:
 
 1. instala dependencias
 2. ejecuta pruebas
 3. empaqueta la Lambda
-4. publica el ZIP en un bucket de artefactos por region
-5. despliega CloudFormation en las regiones configuradas
+4. publica el artefacto que luego consume el release
+
+No despliega a AWS directamente. El despliegue lo hace el release clasico.
 
 ## 13. Notas operativas
 
