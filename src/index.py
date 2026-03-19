@@ -5,8 +5,14 @@ from functools import lru_cache
 
 import boto3
 
+
+def _resolve_log_level(raw_level):
+    normalized_level = str(raw_level or "INFO").strip().upper()
+    return logging.getLevelNamesMapping().get(normalized_level, logging.INFO)
+
+
 logger = logging.getLogger()
-logger.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
+logger.setLevel(_resolve_log_level(os.environ.get("LOG_LEVEL")))
 
 ALLOWED_OVERRIDE_OPTIONS = {
     "Atime",
@@ -101,6 +107,17 @@ def _parse_json_object(raw_value, source_name):
     return parsed_value
 
 
+def _extract_region_from_secret_arn(secret_arn):
+    arn_parts = secret_arn.split(":", 5)
+    if len(arn_parts) < 6:
+        return None
+
+    if arn_parts[0] != "arn" or arn_parts[2] != "secretsmanager":
+        return None
+
+    return arn_parts[3] or None
+
+
 @lru_cache(maxsize=1)
 def _load_secret_configuration():
     secret_arn = os.environ.get("ORCHESTRATOR_SECRET_ARN", "").strip()
@@ -108,7 +125,14 @@ def _load_secret_configuration():
         return {}
 
     logger.info("Cargando configuracion adicional desde Secrets Manager")
-    response = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn)
+    secrets_manager_client_kwargs = {}
+    secret_region = _extract_region_from_secret_arn(secret_arn)
+    if secret_region:
+        secrets_manager_client_kwargs["region_name"] = secret_region
+
+    response = boto3.client("secretsmanager", **secrets_manager_client_kwargs).get_secret_value(
+        SecretId=secret_arn
+    )
     secret_string = response.get("SecretString", "")
     return _parse_json_object(secret_string, "ORCHESTRATOR_SECRET_ARN")
 
@@ -186,19 +210,19 @@ def _build_start_request(event_payload):
     include_patterns = _normalize_filter_patterns(
         _first_non_empty(
             event_payload.get("includePatterns"),
-            os.environ.get(MODE_ENV_MAP.get(execution_mode, {}).get("include", ""), ""),
             mode_secret.get("includePatterns"),
-            os.environ.get("DEFAULT_INCLUDE_PATTERNS", ""),
+            os.environ.get(MODE_ENV_MAP.get(execution_mode, {}).get("include", ""), ""),
             secret_config.get("defaultIncludePatterns"),
+            os.environ.get("DEFAULT_INCLUDE_PATTERNS", ""),
         )
     )
     exclude_patterns = _normalize_filter_patterns(
         _first_non_empty(
             event_payload.get("excludePatterns"),
-            os.environ.get(MODE_ENV_MAP.get(execution_mode, {}).get("exclude", ""), ""),
             mode_secret.get("excludePatterns"),
-            os.environ.get("DEFAULT_EXCLUDE_PATTERNS", ""),
+            os.environ.get(MODE_ENV_MAP.get(execution_mode, {}).get("exclude", ""), ""),
             secret_config.get("defaultExcludePatterns"),
+            os.environ.get("DEFAULT_EXCLUDE_PATTERNS", ""),
         )
     )
 
@@ -207,9 +231,9 @@ def _build_start_request(event_payload):
         MODE_ENV_MAP.get(execution_mode, {}).get("override", "override"),
     )
     override_options = DEFAULT_OVERRIDE_OPTIONS.get(execution_mode, {}).copy()
+    override_options.update(_normalize_override_options(env_override_options))
     override_options.update(_normalize_override_options(secret_config.get("defaultOverrideOptions", {})))
     override_options.update(_normalize_override_options(mode_secret.get("overrideOptions", {})))
-    override_options.update(_normalize_override_options(env_override_options))
     override_options.update(_normalize_override_options(event_payload.get("overrideOptions", {})))
 
     start_request = {"TaskArn": task_arn}

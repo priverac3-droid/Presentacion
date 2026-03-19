@@ -209,12 +209,6 @@ Resources:
       LogGroupName: !Sub "/aws/datasync/ach-backup-${AmbienteDespliegue}-${AWS::Region}"
       RetentionInDays: 30
 
-  OrquestadorLambdaLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/ach-datasync-trigger-${AmbienteDespliegue}"
-      RetentionInDays: 30
-
   DataSyncRole:
     Type: AWS::IAM::Role
     Properties:
@@ -467,26 +461,26 @@ Resources:
           - aws.datasync
         detail-type:
           - DataSync Task Execution State Change
+        resources:
+          - prefix: !Sub "${HistoricalDataSyncTask}/execution/"
+          - prefix: !Sub "${DailyDataSyncTask}/execution/"
         detail:
           State:
             - ERROR
-          TaskArn:
-            - !Ref HistoricalDataSyncTask
-            - !Ref DailyDataSyncTask
       Targets:
         - Arn: !Ref SnsTopicAlertas
           Id: EnviarEmailSoporte
           InputTransformer:
             InputPathsMap:
-              executionArn: $.detail.TaskExecutionArn
+              executionArn: $.resources[0]
               result: $.detail.Result
-              taskArn: $.detail.TaskArn
+              state: $.detail.State
             InputTemplate: |
               "ALERTA ACH
               ------------------------------------------------
               La tarea de respaldo reporto un error.
-              TaskArn: <taskArn>
               TaskExecutionArn: <executionArn>
+              Estado: <state>
               Detalle: <result>"
 
   LambdaExecutionRole:
@@ -505,14 +499,18 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: LambdaLogs
+              - Sid: LambdaCreateLogGroup
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - Sid: LambdaWriteLogs
                 Effect: Allow
                 Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !GetAtt OrquestadorLambdaLogGroup.Arn
-                  - !Sub "${OrquestadorLambdaLogGroup.Arn}:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ach-datasync-trigger-${AmbienteDespliegue}:*"
               - Sid: StartHistoricalAndDailyTasks
                 Effect: Allow
                 Action:

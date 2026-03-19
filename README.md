@@ -155,6 +155,11 @@ secreto JSON opcional. Ejemplo de estructura:
 Ese secreto es opcional. La solucion funciona tambien solo con variables de
 entorno inyectadas por CloudFormation.
 
+Cuando uses `OrchestratorSecretArn`, pasa el ARN completo del secreto. La Lambda
+usa la region embebida en el ARN para leer el secreto correctamente incluso en
+despliegues multi-region. Los valores del secreto tienen prioridad sobre las
+variables de entorno del modo correspondiente.
+
 ## 7. Auditoria y observabilidad
 
 La solucion deja trazabilidad en varias capas:
@@ -201,6 +206,11 @@ crear buckets nuevos. No se fuerza por defecto porque es irreversible.
 
 ## 10. Despliegue manual
 
+Antes de ejecutar un despliegue manual:
+
+1. sube el ZIP de Lambda a un bucket de artefactos en la misma region del stack
+2. usa la key real publicada, por ejemplo `ach-datasync/lambda/lambda-code-<BuildId>.zip`
+
 ### dev3
 
 #### Virginia
@@ -213,7 +223,7 @@ aws cloudformation deploy \
   --stack-name ACH-Replicacion-dev3 \
   --parameter-overrides file://infra/parameters/params-dev3.json \
   BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-  KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
+  KeyCodigoLambda="ach-datasync/lambda/lambda-code-<BuildId>.zip" \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
@@ -227,8 +237,8 @@ aws cloudformation deploy \
   --template-file infra/ach-datasync-master.yaml \
   --stack-name ACH-Replicacion-dev3 \
   --parameter-overrides file://infra/parameters/params-dev3.json \
-  BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-  KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
+  BucketCodigoLambda="b1-uswest2-devops-artifacts-507781971948" \
+  KeyCodigoLambda="ach-datasync/lambda/lambda-code-<BuildId>.zip" \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```
@@ -243,7 +253,7 @@ aws cloudformation deploy \
   --stack-name ACH-Replicacion-qa03 \
   --parameter-overrides file://infra/parameters/params-qa03.json \
   BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-  KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
+  KeyCodigoLambda="ach-datasync/lambda/lambda-code-<BuildId>.zip" \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
@@ -258,7 +268,7 @@ aws cloudformation deploy \
   --stack-name ACH-Replicacion-pdn \
   --parameter-overrides file://infra/parameters/params-pdn.json \
   BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-  KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
+  KeyCodigoLambda="ach-datasync/lambda/lambda-code-<BuildId>.zip" \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
@@ -316,7 +326,7 @@ El pipeline `azure-pipelinePYTHON_v1_TRUNK.yml`:
 1. instala dependencias
 2. ejecuta pruebas
 3. empaqueta la Lambda
-4. publica el ZIP en S3
+4. publica el ZIP en un bucket de artefactos por region
 5. despliega CloudFormation en las regiones configuradas
 
 ## 13. Notas operativas

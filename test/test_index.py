@@ -140,6 +140,7 @@ def test_lambda_generic_exception(mock_boto_client, monkeypatch):
 def test_lambda_reads_secret_configuration(mock_boto_client, monkeypatch):
     mock_datasync, _ = _build_datasync_mock()
     mock_secrets = MagicMock()
+    boto3_client_calls = []
     mock_secrets.get_secret_value.return_value = {
         "SecretString": (
             '{"historical": {"includePatterns": ["/Listado", "reportes"], '
@@ -147,7 +148,8 @@ def test_lambda_reads_secret_configuration(mock_boto_client, monkeypatch):
         )
     }
 
-    def client_factory(service_name):
+    def client_factory(service_name, **kwargs):
+        boto3_client_calls.append((service_name, kwargs))
         if service_name == "datasync":
             return mock_datasync
         if service_name == "secretsmanager":
@@ -159,11 +161,19 @@ def test_lambda_reads_secret_configuration(mock_boto_client, monkeypatch):
         "HISTORICAL_DATASYNC_TASK_ARN",
         "arn:aws:datasync:us-east-1:123456789012:task/historical-001",
     )
-    monkeypatch.setenv("ORCHESTRATOR_SECRET_ARN", "arn:aws:secretsmanager:us-east-1:123456789012:secret:ach/config")
+    monkeypatch.setenv(
+        "HISTORICAL_OVERRIDE_OPTIONS_JSON",
+        '{"BytesPerSecond": 5242880}',
+    )
+    monkeypatch.setenv(
+        "ORCHESTRATOR_SECRET_ARN",
+        "arn:aws:secretsmanager:us-west-2:123456789012:secret:ach/config",
+    )
 
     response = lambda_handler({"executionMode": "historical"}, {})
 
     assert response["statusCode"] == 200
+    assert ("secretsmanager", {"region_name": "us-west-2"}) in boto3_client_calls
     mock_datasync.start_task_execution.assert_called_once_with(
         TaskArn="arn:aws:datasync:us-east-1:123456789012:task/historical-001",
         Includes=[{
