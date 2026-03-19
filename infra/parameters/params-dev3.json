@@ -1,0 +1,74 @@
+[
+  {
+    "ParameterKey": "AmbienteDespliegue",
+    "ParameterValue": "dev3"
+  },
+  {
+    "ParameterKey": "CuentaDestinoID",
+    "ParameterValue": "507781971948"
+  },
+  {
+    "ParameterKey": "BucketOrigenNombre",
+    "ParameterValue": "dev3-integrations-t1-batch-outputfiledirectory-507781971948"
+  },
+  {
+    "ParameterKey": "RutaOrigenACH",
+    "ParameterValue": "/replication/ACH/"
+  },
+  {
+    "ParameterKey": "EmailNotificaciones",
+    "ParameterValue": "paul.rivera@banistmo.com"
+  },
+  {
+    "ParameterKey": "RutaDestinoACH",
+    "ParameterValue": "/ACH/"
+  },
+  {
+    "ParameterKey": "CrearBucketDestino",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "BucketDestinoNombre",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "BucketDestinoKmsKeyArn",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "ScheduleExpressionDaily",
+    "ParameterValue": "cron(0 1 * * ? *)"
+  },
+  {
+    "ParameterKey": "EnableDailySchedule",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "HistoricalThrottleBytesPerSecond",
+    "ParameterValue": "52428800"
+  },
+  {
+    "ParameterKey": "DailyThrottleBytesPerSecond",
+    "ParameterValue": "20971520"
+  },
+  {
+    "ParameterKey": "TaskReportSubdirectory",
+    "ParameterValue": "/reports/ach/"
+  },
+  {
+    "ParameterKey": "HabilitarObjectLock",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "OrchestratorSecretArn",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "BucketCodigoLambda",
+    "ParameterValue": "ESTE_VALOR_LO_CAMBIA_EL_PIPELINE_AUTOMATICAMENTE"
+  },
+  {
+    "ParameterKey": "KeyCodigoLambda",
+    "ParameterValue": "ESTE_VALOR_LO_CAMBIA_EL_PIPELINE_AUTOMATICAMENTE"
+  }
+]

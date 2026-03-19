@@ -1,0 +1,611 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  [PROYECTO ACH] Respaldo transversal S3-to-S3 usando AWS DataSync + Lambda.
+  Soporta carga historica bajo demanda, sincronizacion diaria, despliegue en
+  Virginia y Oregon, y reutilizacion o creacion controlada del bucket destino.
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      ShortName: useast1
+    us-west-2:
+      ShortName: uswest2
+
+Parameters:
+  AmbienteDespliegue:
+    Type: String
+    AllowedValues:
+      - dev3
+      - qa03
+      - pdn
+    Description: Ambiente funcional al que pertenecen el origen y el destino.
+
+  CuentaDestinoID:
+    Type: String
+    AllowedPattern: '^\d{12}$'
+    Description: Cuenta AWS del ambiente destino.
+
+  BucketOrigenNombre:
+    Type: String
+    Description: Nombre exacto del bucket origen del mismo ambiente.
+
+  RutaOrigenACH:
+    Type: String
+    Default: /replication/ACH/
+    Description: Prefijo origen que contiene la data ACH.
+
+  RutaDestinoACH:
+    Type: String
+    Default: /ACH/
+    Description: Prefijo destino dentro del bucket transversal.
+
+  CrearBucketDestino:
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+    Description: true para crear el bucket destino; false para reutilizar uno existente.
+
+  BucketDestinoNombre:
+    Type: String
+    Default: ''
+    Description: >
+      Nombre exacto del bucket destino. Si se deja vacio, se usa la convención
+      b1-[region]-[amb]-coreb-backuptransversal-[cuenta].
+
+  BucketDestinoKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >
+      ARN de la CMK del bucket destino existente si usa SSE-KMS. Dejar vacio si
+      el bucket usa SSE-S3 o si la plantilla crea el bucket.
+
+  EmailNotificaciones:
+    Type: String
+    AllowedPattern: '^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
+    Description: Correo responsable que recibira las alertas de fallo.
+
+  ScheduleExpressionDaily:
+    Type: String
+    Default: cron(0 1 * * ? *)
+    Description: Cron para la corrida diaria a traves de EventBridge.
+
+  EnableDailySchedule:
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+    Description: Permite activar o desactivar el batch diario.
+
+  HistoricalThrottleBytesPerSecond:
+    Type: Number
+    Default: 52428800
+    Description: Limite de ancho de banda para la carga historica.
+
+  DailyThrottleBytesPerSecond:
+    Type: Number
+    Default: 20971520
+    Description: Limite de ancho de banda para la sincronizacion diaria.
+
+  TaskReportSubdirectory:
+    Type: String
+    Default: /reports/ach/
+    Description: Prefijo donde DataSync almacenara los task reports para auditoria.
+
+  HabilitarObjectLock:
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'false'
+    Description: >
+      Habilita Object Lock solo cuando la plantilla crea el bucket destino.
+      Es irreversible y por eso queda opt-in.
+
+  OrchestratorSecretArn:
+    Type: String
+    Default: ''
+    Description: >
+      ARN opcional de un secreto JSON en Secrets Manager para overrides
+      operativos del orquestador. No se almacenan secretos en el repositorio.
+
+  BucketCodigoLambda:
+    Type: String
+    Description: Bucket S3 donde el pipeline publica el ZIP de Lambda.
+
+  KeyCodigoLambda:
+    Type: String
+    Description: Llave S3 del ZIP de Lambda.
+
+Conditions:
+  CreateDestinationBucket: !Equals [!Ref CrearBucketDestino, 'true']
+  HasExplicitDestinationBucketName: !Not [!Equals [!Ref BucketDestinoNombre, '']]
+  HasDestinationBucketKmsKey: !Not [!Equals [!Ref BucketDestinoKmsKeyArn, '']]
+  HasOrchestratorSecret: !Not [!Equals [!Ref OrchestratorSecretArn, '']]
+  EnableDailyScheduleCondition: !Equals [!Ref EnableDailySchedule, 'true']
+  EnableObjectLockOnNewBucket: !And
+    - !Condition CreateDestinationBucket
+    - !Equals [!Ref HabilitarObjectLock, 'true']
+
+Resources:
+  KmsKeyReplicacion:
+    Condition: CreateDestinationBucket
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "Llave KMS para respaldo ACH ${AmbienteDespliegue} ${AWS::Region}"
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PermitirAdministracionRoot
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: 'kms:*'
+            Resource: '*'
+
+  KmsKeyAlias:
+    Condition: CreateDestinationBucket
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/ach-backup-${AmbienteDespliegue}-${AWS::Region}"
+      TargetKeyId: !Ref KmsKeyReplicacion
+
+  BucketDestinoACH:
+    Condition: CreateDestinationBucket
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !If
+        - HasExplicitDestinationBucketName
+        - !Ref BucketDestinoNombre
+        - !Sub
+          - "b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+          - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !Ref KmsKeyReplicacion
+              SSEAlgorithm: aws:kms
+      VersioningConfiguration:
+        Status: Enabled
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      ObjectLockEnabled: !If [EnableObjectLockOnNewBucket, true, !Ref 'AWS::NoValue']
+      ObjectLockConfiguration: !If
+        - EnableObjectLockOnNewBucket
+        - ObjectLockEnabled: Enabled
+          Rule:
+            DefaultRetention:
+              Mode: GOVERNANCE
+              Years: 8
+        - !Ref 'AWS::NoValue'
+      LifecycleConfiguration:
+        Rules:
+          - Id: Transicion-DeepArchive
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: DEEP_ARCHIVE
+            ExpirationInDays: 2920
+      Tags:
+        - Key: Ambiente
+          Value: !Ref AmbienteDespliegue
+        - Key: Proyecto
+          Value: Respaldo Transversal ACH
+
+  DataSyncLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/datasync/ach-backup-${AmbienteDespliegue}-${AWS::Region}"
+      RetentionInDays: 30
+
+  DataSyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ach-datasync-role-${AmbienteDespliegue}-${AWS::Region}"
+      Description: Rol de DataSync para respaldo ACH dentro del mismo ambiente.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: datasync.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DataSyncOperacionesACH
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SourceBucketMetadata
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                Resource: !Sub "arn:aws:s3:::${BucketOrigenNombre}"
+              - Sid: SourceBucketObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectTagging
+                Resource: !Sub "arn:aws:s3:::${BucketOrigenNombre}/*"
+              - Sid: DestinationBucketMetadata
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                Resource:
+                  !If
+                    - CreateDestinationBucket
+                    - !GetAtt BucketDestinoACH.Arn
+                    - !If
+                      - HasExplicitDestinationBucketName
+                      - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
+                      - !Sub
+                        - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+                        - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+              - Sid: DestinationBucketObjects
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetObject
+                  - s3:GetObjectTagging
+                  - s3:PutObject
+                  - s3:PutObjectTagging
+                Resource:
+                  !If
+                    - CreateDestinationBucket
+                    - !Sub "${BucketDestinoACH.Arn}/*"
+                    - !If
+                      - HasExplicitDestinationBucketName
+                      - !Sub "arn:aws:s3:::${BucketDestinoNombre}/*"
+                      - !Sub
+                        - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}/*"
+                        - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+              - !If
+                - CreateDestinationBucket
+                - Sid: DestinationBucketKmsManagedByStack
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                  Resource: !GetAtt KmsKeyReplicacion.Arn
+                - !Ref 'AWS::NoValue'
+              - !If
+                - HasDestinationBucketKmsKey
+                - Sid: DestinationBucketKmsProvidedAsParameter
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                  Resource: !Ref BucketDestinoKmsKeyArn
+                - !Ref 'AWS::NoValue'
+              - Sid: DataSyncLogging
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !GetAtt DataSyncLogGroup.Arn
+                  - !Sub "${DataSyncLogGroup.Arn}:*"
+
+  LocationOrigen:
+    Type: AWS::DataSync::LocationS3
+    Properties:
+      S3BucketArn: !Sub "arn:aws:s3:::${BucketOrigenNombre}"
+      Subdirectory: !Ref RutaOrigenACH
+      S3Config:
+        BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
+      Tags:
+        - Key: Tipo
+          Value: !Sub "Origen-${AmbienteDespliegue}"
+
+  LocationDestino:
+    Type: AWS::DataSync::LocationS3
+    Properties:
+      S3BucketArn:
+        !If
+          - CreateDestinationBucket
+          - !GetAtt BucketDestinoACH.Arn
+          - !If
+            - HasExplicitDestinationBucketName
+            - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
+            - !Sub
+              - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+              - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+      Subdirectory: !Ref RutaDestinoACH
+      S3Config:
+        BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
+      Tags:
+        - Key: Tipo
+          Value: !Sub "Destino-${AmbienteDespliegue}"
+
+  HistoricalDataSyncTask:
+    Type: AWS::DataSync::Task
+    Properties:
+      Name: !Sub "migracion-ach-historical-${AmbienteDespliegue}-${AWS::Region}"
+      SourceLocationArn: !Ref LocationOrigen
+      DestinationLocationArn: !Ref LocationDestino
+      CloudWatchLogGroupArn: !GetAtt DataSyncLogGroup.Arn
+      Options:
+        BytesPerSecond: !Ref HistoricalThrottleBytesPerSecond
+        LogLevel: BASIC
+        ObjectTags: PRESERVE
+        OverwriteMode: ALWAYS
+        PreserveDeletedFiles: PRESERVE
+        TaskQueueing: ENABLED
+        TransferMode: ALL
+        VerifyMode: POINT_IN_TIME_CONSISTENT
+      TaskReportConfig:
+        Destination:
+          S3:
+            BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
+            S3BucketArn:
+              !If
+                - CreateDestinationBucket
+                - !GetAtt BucketDestinoACH.Arn
+                - !If
+                  - HasExplicitDestinationBucketName
+                  - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
+                  - !Sub
+                    - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+                    - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+            Subdirectory: !Ref TaskReportSubdirectory
+        ObjectVersionIds: NONE
+        OutputType: STANDARD
+        Overrides:
+          Deleted:
+            ReportLevel: ERRORS_ONLY
+          Skipped:
+            ReportLevel: SUCCESSES_AND_ERRORS
+          Transferred:
+            ReportLevel: SUCCESSES_AND_ERRORS
+          Verified:
+            ReportLevel: SUCCESSES_AND_ERRORS
+        ReportLevel: SUCCESSES_AND_ERRORS
+
+  DailyDataSyncTask:
+    Type: AWS::DataSync::Task
+    Properties:
+      Name: !Sub "migracion-ach-daily-${AmbienteDespliegue}-${AWS::Region}"
+      SourceLocationArn: !Ref LocationOrigen
+      DestinationLocationArn: !Ref LocationDestino
+      CloudWatchLogGroupArn: !GetAtt DataSyncLogGroup.Arn
+      Options:
+        BytesPerSecond: !Ref DailyThrottleBytesPerSecond
+        LogLevel: BASIC
+        ObjectTags: PRESERVE
+        OverwriteMode: ALWAYS
+        PreserveDeletedFiles: PRESERVE
+        TaskQueueing: ENABLED
+        TransferMode: CHANGED
+        VerifyMode: POINT_IN_TIME_CONSISTENT
+      TaskReportConfig:
+        Destination:
+          S3:
+            BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
+            S3BucketArn:
+              !If
+                - CreateDestinationBucket
+                - !GetAtt BucketDestinoACH.Arn
+                - !If
+                  - HasExplicitDestinationBucketName
+                  - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
+                  - !Sub
+                    - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+                    - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+            Subdirectory: !Ref TaskReportSubdirectory
+        ObjectVersionIds: NONE
+        OutputType: STANDARD
+        Overrides:
+          Deleted:
+            ReportLevel: ERRORS_ONLY
+          Skipped:
+            ReportLevel: SUCCESSES_AND_ERRORS
+          Transferred:
+            ReportLevel: SUCCESSES_AND_ERRORS
+          Verified:
+            ReportLevel: SUCCESSES_AND_ERRORS
+        ReportLevel: SUCCESSES_AND_ERRORS
+
+  SnsTopicAlertas:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "ach-alertas-falla-${AmbienteDespliegue}-${AWS::Region}"
+      DisplayName: !Sub "Alerta ACH ${AmbienteDespliegue} ${AWS::Region}"
+
+  SnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref SnsTopicAlertas
+      Protocol: email
+      Endpoint: !Ref EmailNotificaciones
+
+  SnsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref SnsTopicAlertas
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PermitirEventBridgePublicar
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref SnsTopicAlertas
+
+  DataSyncFailureRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "ach-monitoreo-fallas-${AmbienteDespliegue}-${AWS::Region}"
+      Description: Notifica por SNS si alguna tarea DataSync de ACH falla.
+      EventPattern:
+        source:
+          - aws.datasync
+        detail-type:
+          - DataSync Task Execution State Change
+        resources:
+          - prefix: !Sub "${HistoricalDataSyncTask}/execution/"
+          - prefix: !Sub "${DailyDataSyncTask}/execution/"
+        detail:
+          State:
+            - ERROR
+      Targets:
+        - Arn: !Ref SnsTopicAlertas
+          Id: EnviarEmailSoporte
+          InputTransformer:
+            InputPathsMap:
+              executionArn: $.resources[0]
+              result: $.detail.Result
+              state: $.detail.State
+            InputTemplate: |
+              "ALERTA ACH
+              ------------------------------------------------
+              La tarea de respaldo reporto un error.
+              TaskExecutionArn: <executionArn>
+              Estado: <state>
+              Detalle: <result>"
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ach-lambda-role-${AmbienteDespliegue}-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaDataSyncExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: LambdaCreateLogGroup
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - Sid: LambdaWriteLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ach-datasync-trigger-${AmbienteDespliegue}:*"
+              - Sid: StartHistoricalAndDailyTasks
+                Effect: Allow
+                Action:
+                  - datasync:StartTaskExecution
+                Resource:
+                  - !Ref HistoricalDataSyncTask
+                  - !Ref DailyDataSyncTask
+              - !If
+                - HasOrchestratorSecret
+                - Sid: ReadOrchestratorSecret
+                  Effect: Allow
+                  Action:
+                    - secretsmanager:GetSecretValue
+                  Resource: !Ref OrchestratorSecretArn
+                - !Ref 'AWS::NoValue'
+
+  OrquestadorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "ach-datasync-trigger-${AmbienteDespliegue}"
+      Description: Orquestador de DataSync para carga historica y sincronizacion diaria.
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 60
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref BucketCodigoLambda
+        S3Key: !Ref KeyCodigoLambda
+      Environment:
+        Variables:
+          DAILY_DATASYNC_TASK_ARN: !Ref DailyDataSyncTask
+          DAILY_EXCLUDE_PATTERNS: ''
+          DAILY_INCLUDE_PATTERNS: ''
+          DAILY_OVERRIDE_OPTIONS_JSON: !Sub |
+            {"BytesPerSecond": ${DailyThrottleBytesPerSecond}}
+          DEFAULT_EXCLUDE_PATTERNS: ''
+          DEFAULT_INCLUDE_PATTERNS: ''
+          HISTORICAL_DATASYNC_TASK_ARN: !Ref HistoricalDataSyncTask
+          HISTORICAL_EXCLUDE_PATTERNS: ''
+          HISTORICAL_INCLUDE_PATTERNS: ''
+          HISTORICAL_OVERRIDE_OPTIONS_JSON: !Sub |
+            {"BytesPerSecond": ${HistoricalThrottleBytesPerSecond}}
+          LOG_LEVEL: INFO
+          ORCHESTRATOR_SECRET_ARN: !Ref OrchestratorSecretArn
+
+  DailyOrchestratorRule:
+    Condition: EnableDailyScheduleCondition
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "ach-datasync-daily-${AmbienteDespliegue}-${AWS::Region}"
+      Description: Invoca la Lambda orquestadora para el batch diario.
+      ScheduleExpression: !Ref ScheduleExpressionDaily
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt OrquestadorLambda.Arn
+          Id: DailyDataSyncExecution
+          Input: !Sub |
+            {"executionMode":"daily","ambiente":"${AmbienteDespliegue}","region":"${AWS::Region}"}
+
+  PermissionForDailyRuleInvokeLambda:
+    Condition: EnableDailyScheduleCondition
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OrquestadorLambda
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyOrchestratorRule.Arn
+
+Outputs:
+  DestinationBucketName:
+    Description: Bucket destino efectivo para el ambiente y la region.
+    Value:
+      !If
+        - CreateDestinationBucket
+        - !Ref BucketDestinoACH
+        - !If
+          - HasExplicitDestinationBucketName
+          - !Ref BucketDestinoNombre
+          - !Sub
+            - "b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+            - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+
+  DailyDataSyncTaskArn:
+    Description: ARN de la tarea diaria.
+    Value: !Ref DailyDataSyncTask
+
+  HistoricalDataSyncTaskArn:
+    Description: ARN de la tarea historica.
+    Value: !Ref HistoricalDataSyncTask
+
+  LambdaFunctionName:
+    Description: Nombre de la Lambda orquestadora.
+    Value: !Ref OrquestadorLambda
+
+  DailyScheduleExpression:
+    Description: Cron del batch diario.
+    Value: !If [EnableDailyScheduleCondition, !Ref ScheduleExpressionDaily, DISABLED]

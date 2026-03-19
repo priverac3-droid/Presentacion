@@ -1,0 +1,82 @@
+# =============================================================================
+# VARIABLES Y RECURSOS
+# =============================================================================
+variables:
+  # variable de grupo de artifactory
+  - group: Artifactory  
+  # Propiedad del sonarQube para indicar el directorio a analizar
+  - name: sonarSources
+    value: 'src'
+  # propiedad de sonarQube para indicar los directorios a excluir en el análisis
+  - name: sonarExclusions
+    value: 'test/*,mocks/*'
+  # propiedad de sonarQube para indicar el directorio donde se encontrara el reporte de covertura
+  - name: sonarCoveragePaths
+    value: '$(System.DefaultWorkingDirectory)/coverage.xml'
+  # Nombre del service connection para tarea de sonarQube
+  - name: sonarQubeServiceEndpoint
+    value: 'SonarLts'
+  # nombre del script de pruebas unitarias
+  - name: unitTestCommand
+    value: 'coverage erase && coverage run -m pytest && coverage xml --omit=./venv/* && mkdir -p coverage && cp ./coverage.xml ./coverage/coverage.xml'
+  # Dependencias a instalar
+  - name: path_dependencies_file
+    value: 'requirements.txt'
+  # Versión que se descargará en el agente temporalmente
+  - name: versionPython
+    value: '3.12'
+
+resources:
+  repositories:
+    - repository: template
+      type: git
+      name: DevOps/_git/templates-yaml
+      ref: 'refs/heads/master' # indicamos la rama que apuntamos en el repositorios template-yaml, siempre debemos apuntar a master
+
+trigger:
+  - trunk
+
+name: $(date:yyyyMMdd)$(rev:.r)
+
+# =============================================================================
+# STAGES (ETAPAS)
+# =============================================================================
+stages:
+
+# -----------------------------------------------------------------------------
+# ETAPA 1: CI (INTEGRACIÓN CONTINUA)
+# -----------------------------------------------------------------------------
+- stage: Build_And_Test
+  displayName: 'Compilación y Pruebas'
+  jobs:
+  - job: CI
+    pool: 
+      name: Docker-Agents
+    workspace:
+      clean: all
+    steps:
+    - template: build_PYTHON_v1.yml@template #ref de template en otro repository de pasos de CI
+      parameters:
+        sonarCoveragePaths: ${{variables.sonarCoveragePaths}}
+        sonarExclusions: ${{variables.sonarExclusions}}
+        sonarSources: ${{variables.sonarSources}}
+        sonarQubeServiceEndpoint: ${{variables.sonarQubeServiceEndpoint}}   
+        unitTestCommand: ${{variables.unitTestCommand}}
+        path_dependencies_file: ${{variables.path_dependencies_file}}
+        versionPython: ${{variables.versionPython}}
+        installLZ: false
+    
+    # Empaquetado estándar corporativo (.tar.gz)
+    - task: ArchiveFiles@2
+      displayName: 'Preparando artefacto a publicar'
+      inputs:
+        rootFolderOrFile: '$(Build.Repository.LocalPath)'
+        includeRootFolder: false
+        archiveType: tar
+        archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).tar.gz'
+    
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publicando artefacto'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).tar.gz'
+        ArtifactName: artifact

@@ -1,0 +1,34 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PermitirInvocarOrquestadorAch",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": [
+        "arn:aws:lambda:us-east-1:<ACCOUNT_ID>:function:ach-datasync-trigger-<ambiente>",
+        "arn:aws:lambda:us-west-2:<ACCOUNT_ID>:function:ach-datasync-trigger-<ambiente>"
+      ]
+    },
+    {
+      "Sid": "PermitirConsultarEjecucionesAch",
+      "Effect": "Allow",
+      "Action": [
+        "datasync:DescribeTask",
+        "datasync:DescribeTaskExecution",
+        "datasync:ListTaskExecutions"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PermitirLeerSecretoOperativoOpcional",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:<region>:<ACCOUNT_ID>:secret:ach/*"
+    }
+  ]
+}
