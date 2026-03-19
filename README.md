@@ -248,6 +248,15 @@ Si dev ya desplego bien con el release actual, no hace falta tocar de inmediato:
 - las aprobaciones manuales
 - los stages actuales de dev / qa / prod
 
+### Compatibilidad con stacks ya existentes
+
+Si un ambiente ya fue desplegado antes con la version inicial del template y el
+stack ya administra el bucket destino y la CMK asociados, mantén
+`CrearBucketDestino=true` en ese ambiente. Cambiarlo a `false` durante un update
+haría que CloudFormation intente retirar esos recursos del stack, lo que puede
+provocar rollback si el bucket ya tiene informacion o si la llave KMS sigue en
+uso.
+
 ### Que si habria que cambiar mas adelante si quieren multi-region desde release
 
 Eso no es obligatorio para continuar con el flujo actual, pero si luego quieren

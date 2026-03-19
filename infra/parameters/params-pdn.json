@@ -25,7 +25,7 @@
   },
   {
     "ParameterKey": "CrearBucketDestino",
-    "ParameterValue": "false"
+    "ParameterValue": "true"
   },
   {
     "ParameterKey": "BucketDestinoNombre",
