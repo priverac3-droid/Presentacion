@@ -41,6 +41,79 @@ def _build_datasync_mock():
     return mock_datasync, MockInvalidRequestException
 
 
+def test_helper_functions_validate_events_and_json():
+    assert index._normalize_event(None) == {}
+    assert index._normalize_event("   ") == {}
+    assert index._normalize_event("historical") == {"executionMode": "historical"}
+    assert index._normalize_event('{"executionMode":"daily"}') == {"executionMode": "daily"}
+
+    with pytest.raises(ValueError, match="objeto JSON"):
+        index._normalize_event('["not", "a", "dict"]')
+
+    with pytest.raises(ValueError, match="objeto JSON"):
+        index._normalize_event(123)
+
+    assert index._parse_json_object("", "TEST_SOURCE") == {}
+
+    with pytest.raises(ValueError, match="no es JSON válido"):
+        index._parse_json_object("{", "TEST_SOURCE")
+
+    with pytest.raises(ValueError, match="debe ser un objeto JSON"):
+        index._parse_json_object("[]", "TEST_SOURCE")
+
+
+def test_helper_functions_validate_secret_regions_and_mode_config():
+    assert index._extract_region_from_secret_arn("invalid") is None
+    assert index._extract_region_from_secret_arn(
+        "arn:aws:ssm:us-east-1:123456789012:parameter/foo"
+    ) is None
+    assert index._extract_region_from_secret_arn(
+        "arn:aws:secretsmanager:us-west-2:123456789012:secret:ach/config"
+    ) == "us-west-2"
+
+    with pytest.raises(ValueError, match="debe ser un objeto"):
+        index._get_mode_secret({"daily": "bad-value"}, "daily")
+
+
+def test_helper_functions_validate_filters_and_overrides():
+    assert index._normalize_filter_patterns("Listado| /TRTP-IN |Listado") == "/Listado|/TRTP-IN"
+    assert index._normalize_filter_patterns([]) is None
+
+    with pytest.raises(ValueError, match="cadena separada"):
+        index._normalize_filter_patterns(10)
+
+    assert index._normalize_override_options("") == {}
+    assert index._normalize_override_options(
+        {"BytesPerSecond": 1, "LogLevel": "", "Uid": None}
+    ) == {"BytesPerSecond": 1}
+
+    with pytest.raises(ValueError, match="objeto JSON"):
+        index._normalize_override_options([])
+
+
+def test_build_start_request_supports_excludes_and_rejects_empty_explicit_task(monkeypatch):
+    monkeypatch.setenv(
+        "HISTORICAL_DATASYNC_TASK_ARN",
+        "arn:aws:datasync:us-east-1:123456789012:task/historical-001",
+    )
+
+    execution_mode, request = index._build_start_request(
+        {
+            "executionMode": "historical",
+            "excludePatterns": ["reportes", "/TRTP-OUT"],
+        }
+    )
+
+    assert execution_mode == "historical"
+    assert request["Excludes"] == [{
+        "FilterType": "SIMPLE_PATTERN",
+        "Value": "/reportes|/TRTP-OUT",
+    }]
+
+    with pytest.raises(ValueError, match="Falta taskArn"):
+        index._build_start_request({"executionMode": "custom", "taskArn": ""})
+
+
 @patch("boto3.client")
 def test_lambda_daily_success(mock_boto_client, monkeypatch):
     mock_datasync, _ = _build_datasync_mock()
