@@ -70,7 +70,7 @@ stages:
     - task: ArchiveFiles@2
       displayName: 'Preparando artefacto a publicar'
       inputs:
-        rootFolder: '$(Build.Repository.LocalPath)'
+        rootFolderOrFile: '$(Build.Repository.LocalPath)'
         includeRootFolder: false
         archiveType: tar
         archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).tar.gz'
