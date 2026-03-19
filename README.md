@@ -1,163 +1,329 @@
-# 📘 Manual de Despliegue: Migración ACH (DataSync + Orquestador)
+# Respaldo Transversal ACH con DataSync + Lambda
 
-**Proyecto:** Replicación Transversal S3-to-S3 con Orquestador Serverless
-**Tecnología:** AWS CloudFormation + DataSync + **Lambda (Python 3.12)** + Azure DevOps
-**Versión:** 2.0 (Con Orquestador Automático)
+Este repositorio implementa una solucion de respaldo S3-to-S3 usando solo:
 
----
+- AWS DataSync
+- AWS Lambda
+- AWS EventBridge
+- AWS SNS
+- AWS CloudFormation
 
-## 🏗️ Arquitectura
+No usa AWS Glue en ninguna parte.
 
-La solución consta de dos componentes principales:
+La solucion fue ajustada para cubrir estos requerimientos:
 
-1. **Canal de Datos (DataSync):** Mueve los archivos de la cuenta Origen a Destino.
-2. **Orquestador (Lambda):** Una función Python que inicia la tarea de DataSync de forma programática y controlada, evitando ejecuciones simultáneas.
+1. Trabajar por ambiente:
+   - dev3 -> origen dev3 -> destino dev3
+   - qa03 -> origen qa03 -> destino qa03
+   - pdn -> origen pdn -> destino pdn
+2. Soportar despliegue en Virginia (`us-east-1`) y Oregon (`us-west-2`)
+3. Ejecutar una carga historica inicial y luego un batch diario
+4. Reutilizar buckets destino existentes o crearlos si hace falta
+5. Mantener buenas practicas de seguridad sin credenciales en texto plano
 
----
+## 1. Estructura del proyecto
 
-## ⚠️ 1. PRERREQUISITO DE SEGURIDAD (CRÍTICO)
+```text
+.
+├── src/
+│   └── index.py
+├── test/
+│   └── test_index.py
+├── infra/
+│   ├── ach-datasync-master.yaml
+│   └── parameters/
+│       ├── params-dev3.json
+│       ├── params-qa03.json
+│       ├── params-pdn.json
+│       └── prerequisito.txt
+├── azure-pipelinePYTHON_v1_TRUNK.yml
+├── requirements.txt
+├── sonar-project.properties
+└── permisos
+```
 
-Antes de ejecutar cualquier despliegue, la cuenta de **Desarrollo (Origen - `507781971948`)** debe autorizar a QA y Producción para leer sus datos.
+## 2. Logica principal
 
-**Acción:** Ir al Bucket `dev3-integrations...` -> Permissions -> **Bucket Policy** y pegar:
+La solucion queda dividida en dos flujos:
+
+### Fase 1: carga historica
+
+- La Lambda `ach-datasync-trigger-{ambiente}` se invoca manualmente con
+  `executionMode=historical`
+- La Lambda dispara la tarea `HistoricalDataSyncTask`
+- Esa tarea ejecuta una copia completa (`TransferMode=ALL`)
+- Se preserva el historico en destino y no se borra el origen
+
+### Fase 2: batch diario
+
+- EventBridge invoca la misma Lambda con `executionMode=daily`
+- La Lambda dispara la tarea `DailyDataSyncTask`
+- Esa tarea usa `TransferMode=CHANGED`
+- Solo replica cambios nuevos o modificados
+
+## 3. Arquitectura resultante
+
+Por cada ambiente y por cada region desplegada, el stack crea o reutiliza:
+
+- un bucket destino transversal
+- una CMK KMS si el bucket destino lo crea el stack
+- una ubicacion origen DataSync
+- una ubicacion destino DataSync
+- una tarea DataSync historica
+- una tarea DataSync diaria
+- una Lambda orquestadora
+- una regla EventBridge para el batch diario
+- reportes DataSync en S3
+- alertas SNS por fallo
+
+## 4. Buckets origen por ambiente
+
+Los parametros versionados en el repositorio quedan asi:
+
+| Ambiente | Bucket origen |
+|---|---|
+| dev3 | `dev3-integrations-t1-batch-outputfiledirectory-507781971948` |
+| qa03 | `qa03-integrations-t1-batch-outputfiledirectory-462297762050` |
+| pdn | `prod-integrations-t1-batch-outputfiledirectory-817987897650` |
+
+La ruta origen usada por defecto es:
+
+```text
+/replication/ACH/
+```
+
+## 5. Destino por ambiente y region
+
+Si no se indica `BucketDestinoNombre`, la plantilla usa esta convencion:
+
+```text
+b1-[region-short]-[ambiente]-coreb-backuptransversal-[cuenta]
+```
+
+Ejemplos:
+
+- `b1-useast1-dev3-coreb-backuptransversal-507781971948`
+- `b1-useast1-qa03-coreb-backuptransversal-462297762050`
+- `b1-uswest2-pdn-coreb-backuptransversal-817987897650`
+
+La ruta destino usada por defecto es:
+
+```text
+/ACH/
+```
+
+DataSync crea el prefijo si no existe. No hace falta crear carpetas manualmente.
+
+## 6. Seguridad
+
+### Principios aplicados
+
+- no se guardan credenciales AWS ni contrasenas en el repositorio
+- la solucion usa roles IAM para Lambda y DataSync
+- el pipeline usa service connections externas
+- la Lambda puede leer configuracion adicional desde Secrets Manager usando
+  `OrchestratorSecretArn`
+- si reutilizas un bucket KMS existente, debes pasar `BucketDestinoKmsKeyArn`
+- el bucket creado por el stack queda:
+  - cifrado con KMS
+  - con versionado habilitado
+  - con bloqueo de acceso publico
+  - con lifecycle a Deep Archive
+
+### Secrets Manager
+
+Si necesitas overrides operativos sin usar variables planas, la Lambda acepta un
+secreto JSON opcional. Ejemplo de estructura:
 
 ```json
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "PermitirLecturaCrossAccountACH",
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": [
-                    "arn:aws:iam::462297762050:root",
-                    "arn:aws:iam::817987897650:root"
-                ]
-            },
-            "Action": [
-                "s3:GetBucketLocation",
-                "s3:ListBucket",
-                "s3:GetObject",
-                "s3:GetObjectTagging"
-            ],
-            "Resource": [
-                "arn:aws:s3:::dev3-integrations-t1-batch-outputfiledirectory-507781971948",
-                "arn:aws:s3:::dev3-integrations-t1-batch-outputfiledirectory-507781971948/*"
-            ]
-        }
-    ]
+  "defaultIncludePatterns": "/Listado|/reportes",
+  "historical": {
+    "includePatterns": "/Listado|/reportes|/TDIR_IN_ERR|/TDIR_IN_HIS|/TDIR_OUT_HIS|/TDIR-OUT|/TRTP-IN|/TRTP-OUT",
+    "overrideOptions": {
+      "BytesPerSecond": 52428800
+    }
+  },
+  "daily": {
+    "overrideOptions": {
+      "BytesPerSecond": 20971520
+    }
+  }
 }
-
 ```
 
----
+Ese secreto es opcional. La solucion funciona tambien solo con variables de
+entorno inyectadas por CloudFormation.
 
-## 🤖 2. DESPLIEGUE AUTOMÁTICO (RECOMENDADO)
+## 7. Auditoria y observabilidad
 
-El despliegue se gestiona mediante **Azure DevOps**.
+La solucion deja trazabilidad en varias capas:
 
-1. Hacer commit en la rama `trunk`.
-2. El Pipeline `azure-pipelinePYTHON_v1_TRUNK.yml` se activará automáticamente.
-3. **Flujo de ejecución:**
-* Instalación de dependencias y parches de seguridad.
-* Ejecución de Pruebas Unitarias (Coverage 100%).
-* Empaquetado del código Lambda (`.zip`).
-* Subida del artefacto a S3 (`b1-useast1-devops-artifacts-507781971948`).
-* Despliegue de CloudFormation inyectando el código dinámicamente.
+- CloudWatch Logs para Lambda
+- CloudWatch Logs para DataSync
+- task reports de DataSync en:
 
-
-
----
-
-## 🛠️ 3. DESPLIEGUE MANUAL (DEBUGGING / EMERGENCY)
-
-**⚠️ IMPORTANTE:** Si necesita desplegar manualmente desde su PC, **debe inyectar la ubicación del código Lambda**, de lo contrario el Stack fallará.
-
-*Asumimos que existe un ZIP base en el bucket de artefactos. Si no, súbalo primero.*
-
-### A) Despliegue en CALIDAD (QA03) - Cuenta `462297762050`
-
-```bash
-export AWS_PROFILE=462297762050_BI-FSDEVELOPERROLE-QAPR
-
-aws cloudformation deploy \
-    --template-file infra/ach-datasync-master.yaml \
-    --stack-name ACH-Migracion-Stack-QA \
-    --parameter-overrides \
-        file://infra/parameters/params-qa03.json \
-        BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-        KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
-    --capabilities CAPABILITY_NAMED_IAM \
-    --region us-east-1
-
+```text
+/reports/ach/
 ```
 
-### B) Despliegue en PRODUCCIÓN (PDN) - Cuenta `817987897650`
+- SNS con notificacion por email cuando una tarea falle
 
-```bash
-export AWS_PROFILE=817987897650_BI-FSDEVELOPERROLE-QAPR
+Los task reports permiten verificar que la copia fue ejecutada y que los objetos
+transferidos o validados quedaron registrados.
 
-aws cloudformation deploy \
-    --template-file infra/ach-datasync-master.yaml \
-    --stack-name ACH-Migracion-Stack-PDN \
-    --parameter-overrides \
-        file://infra/parameters/params-pdn.json \
-        BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-        KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
-    --capabilities CAPABILITY_NAMED_IAM \
-    --region us-east-1
+## 8. Lifecycle y retencion
 
-```
+Para buckets creados por el stack:
 
-### C) Despliegue en DESARROLLO (DEV3) - Cuenta `507781971948`
+- 0 a 90 dias: almacenamiento normal
+- desde dia 91: `DEEP_ARCHIVE`
+- expiracion automatica: 2920 dias (~8 anos)
+
+Object Lock queda disponible como opcion (`HabilitarObjectLock=true`) solo al
+crear buckets nuevos. No se fuerza por defecto porque es irreversible.
+
+## 9. Parametros importantes
+
+| Parametro | Uso |
+|---|---|
+| `BucketOrigenNombre` | Bucket origen del ambiente |
+| `RutaOrigenACH` | Prefijo origen |
+| `RutaDestinoACH` | Prefijo destino |
+| `CrearBucketDestino` | Crear o reutilizar bucket destino |
+| `BucketDestinoNombre` | Nombre explicito del bucket destino |
+| `BucketDestinoKmsKeyArn` | CMK del bucket destino existente |
+| `ScheduleExpressionDaily` | Cron del batch diario |
+| `HistoricalThrottleBytesPerSecond` | Limite historico |
+| `DailyThrottleBytesPerSecond` | Limite diario |
+| `TaskReportSubdirectory` | Ruta de reportes |
+| `OrchestratorSecretArn` | Secreto opcional del orquestador |
+
+## 10. Despliegue manual
+
+### dev3
+
+#### Virginia
 
 ```bash
 export AWS_PROFILE=507781971948_BI-FSDEVELOPERROLE-QAPR
 
 aws cloudformation deploy \
-    --template-file infra/ach-datasync-master.yaml \
-    --stack-name ACH-Migracion-Stack-DEV \
-    --parameter-overrides \
-        file://infra/parameters/params-dev3.json \
-        BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
-        KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
-    --capabilities CAPABILITY_NAMED_IAM \
-    --region us-east-1
-
+  --template-file infra/ach-datasync-master.yaml \
+  --stack-name ACH-Replicacion-dev3 \
+  --parameter-overrides file://infra/parameters/params-dev3.json \
+  BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
+  KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
 ```
 
----
+#### Oregon
 
-## ✅ 4. VALIDACIÓN Y OPERACIÓN
+```bash
+export AWS_PROFILE=507781971948_BI-FSDEVELOPERROLE-QAPR
 
-### 4.1 Verificar Infraestructura
+aws cloudformation deploy \
+  --template-file infra/ach-datasync-master.yaml \
+  --stack-name ACH-Replicacion-dev3 \
+  --parameter-overrides file://infra/parameters/params-dev3.json \
+  BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
+  KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-west-2
+```
 
-1. Ir a CloudFormation y confirmar que el Stack está en **CREATE_COMPLETE** o **UPDATE_COMPLETE**.
-2. Verificar que se creó la Lambda `ach-datasync-trigger-[ambiente]`.
+### qa03
 
-### 4.2 Ejecución de la Migración (NUEVO MÉTODO)
+```bash
+export AWS_PROFILE=462297762050_BI-FSDEVELOPERROLE-QAPR
 
-Ya no es necesario iniciar la tarea manualmente en DataSync. Use el orquestador Lambda:
+aws cloudformation deploy \
+  --template-file infra/ach-datasync-master.yaml \
+  --stack-name ACH-Replicacion-qa03 \
+  --parameter-overrides file://infra/parameters/params-qa03.json \
+  BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
+  KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+```
 
-**Opción A: Desde Consola AWS**
+### pdn
 
-1. Ir a **Lambda** -> Funciones -> `ach-datasync-trigger-[amb]`.
-2. Pestaña **Test**.
-3. Crear un evento vacío `{}` y dar clic en **Test**.
-4. Debe responder `200 OK` y el `ExecutionArn` de DataSync.
+```bash
+export AWS_PROFILE=817987897650_BI-FSDEVELOPERROLE-QAPR
 
-**Opción B: Desde CLI**
+aws cloudformation deploy \
+  --template-file infra/ach-datasync-master.yaml \
+  --stack-name ACH-Replicacion-pdn \
+  --parameter-overrides file://infra/parameters/params-pdn.json \
+  BucketCodigoLambda="b1-useast1-devops-artifacts-507781971948" \
+  KeyCodigoLambda="ach-datasync/lambda/lambda-deploy.zip" \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+```
+
+## 11. Ejecucion operativa
+
+### Carga historica manual
 
 ```bash
 aws lambda invoke \
-    --function-name ach-datasync-trigger-dev3 \
-    --payload '{}' \
-    response.json
-
+  --function-name ach-datasync-trigger-dev3 \
+  --payload '{"executionMode":"historical"}' \
+  response.json
 ```
 
-### 4.3 Monitoreo
+### Carga historica filtrando subcarpetas conocidas
 
-* **Logs de Ejecución:** CloudWatch -> Log Groups -> `/aws/lambda/ach-datasync-trigger-[amb]`.
-* **Estado de Transferencia:** DataSync -> History.
-* **Notificaciones:** Revisar email `paul.rivera@banistmo.com` para alertas de éxito/fallo.
+```bash
+aws lambda invoke \
+  --function-name ach-datasync-trigger-dev3 \
+  --payload '{
+    "executionMode": "historical",
+    "includePatterns": [
+      "Listado",
+      "reportes",
+      "TDIR_IN_ERR",
+      "TDIR_IN_HIS",
+      "TDIR_OUT_HIS",
+      "TDIR-OUT",
+      "TRTP-IN",
+      "TRTP-OUT"
+    ]
+  }' \
+  response.json
+```
+
+### Dry run de validacion
+
+```bash
+aws lambda invoke \
+  --function-name ach-datasync-trigger-dev3 \
+  --payload '{"executionMode":"historical","dryRun":true}' \
+  response.json
+```
+
+### Batch diario
+
+No requiere invocacion manual cuando `EnableDailySchedule=true`, porque
+EventBridge ejecuta la Lambda con el cron configurado en `ScheduleExpressionDaily`.
+
+## 12. Pipeline
+
+El pipeline `azure-pipelinePYTHON_v1_TRUNK.yml`:
+
+1. instala dependencias
+2. ejecuta pruebas
+3. empaqueta la Lambda
+4. publica el ZIP en S3
+5. despliega CloudFormation en las regiones configuradas
+
+## 13. Notas operativas
+
+- Para dev3 y pdn los parametros vienen preparados para reutilizar un bucket destino
+- Para qa03 los parametros vienen preparados para crear el bucket destino si no existe
+- Si el nombre real del bucket destino no coincide con la convencion estandar, define
+  `BucketDestinoNombre`
+- Si el bucket destino existente usa SSE-KMS, define `BucketDestinoKmsKeyArn`
+- Si activas Object Lock, hazlo solo en buckets nuevos y con aprobacion previa

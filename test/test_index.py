@@ -1,106 +1,204 @@
-import pytest
-import os
 from unittest.mock import MagicMock, patch
-# Importamos la función lambda_handler desde nuestra carpeta src
+
+import pytest
+
+from src import index
 from src.index import lambda_handler
 
-# =============================================================================
-# PRUEBAS UNITARIAS (COVERAGE 100%)
-# =============================================================================
 
-@patch('boto3.client')
-def test_lambda_success(mock_boto_client):
-    """
-    CASO 1: CAMINO FELIZ
-    Simula que AWS responde correctamente e inicia la tarea.
-    """
-    # 1. Preparamos el "Actor" (Mock) que fingirá ser DataSync
+@pytest.fixture(autouse=True)
+def clean_environment(monkeypatch):
+    for variable_name in [
+        "DAILY_DATASYNC_TASK_ARN",
+        "HISTORICAL_DATASYNC_TASK_ARN",
+        "DAILY_INCLUDE_PATTERNS",
+        "HISTORICAL_INCLUDE_PATTERNS",
+        "DAILY_EXCLUDE_PATTERNS",
+        "HISTORICAL_EXCLUDE_PATTERNS",
+        "DAILY_OVERRIDE_OPTIONS_JSON",
+        "HISTORICAL_OVERRIDE_OPTIONS_JSON",
+        "DEFAULT_INCLUDE_PATTERNS",
+        "DEFAULT_EXCLUDE_PATTERNS",
+        "ORCHESTRATOR_SECRET_ARN",
+    ]:
+        monkeypatch.delenv(variable_name, raising=False)
+
+    index._load_secret_configuration.cache_clear()
+    yield
+    index._load_secret_configuration.cache_clear()
+
+
+def _build_datasync_mock():
     mock_datasync = MagicMock()
-    mock_boto_client.return_value = mock_datasync
-    
-    # 2. Le decimos al actor qué debe responder cuando lo llamen
+
+    class MockInvalidRequestException(Exception):
+        pass
+
+    mock_datasync.exceptions.InvalidRequestException = MockInvalidRequestException
     mock_datasync.start_task_execution.return_value = {
-        'TaskExecutionArn': 'arn:aws:datasync:us-east-1:123456789012:execution/exec-001'
+        "TaskExecutionArn": "arn:aws:datasync:us-east-1:123456789012:execution/exec-001"
     }
-    
-    # 3. Configuramos el entorno (Simulamos la variable que inyecta CloudFormation)
-    os.environ['DATASYNC_TASK_ARN'] = 'arn:aws:datasync:us-east-1:123456789012:task/task-001'
-    
-    # 4. EJECUTAMOS LA LAMBDA
-    response = lambda_handler({}, {})
-    
-    # 5. VERIFICACIONES (ASSERTS)
-    assert response['statusCode'] == 200
-    assert 'exec-001' in str(response['body'])
-    # Verificamos que sí se llamó a la función de AWS exactamente una vez
-    mock_datasync.start_task_execution.assert_called_once()
+    return mock_datasync, MockInvalidRequestException
 
-def test_lambda_missing_env_var():
-    """
-    CASO 2: ERROR DE CONFIGURACIÓN
-    Simula que olvidamos poner la variable de entorno en el CloudFormation.
-    """
-    # 1. Borramos la variable a propósito
-    if 'DATASYNC_TASK_ARN' in os.environ:
-        del os.environ['DATASYNC_TASK_ARN']
-        
-    # 2. Ejecutamos
-    response = lambda_handler({}, {})
-    
-    # 3. Verificamos que falle controladamente (Error 500 pero manejado)
-    assert response['statusCode'] == 500
-    assert 'Error de configuración' in response['body']
 
-@patch('boto3.client')
-def test_lambda_invalid_request(mock_boto_client):
-    """
-    CASO 3: TAREA YA EN EJECUCIÓN (Error 400)
-    Simula que AWS nos dice "Espera, ya estoy ocupado".
-    """
-    # Preparación del Mock
-    mock_datasync = MagicMock()
+@patch("boto3.client")
+def test_lambda_daily_success(mock_boto_client, monkeypatch):
+    mock_datasync, _ = _build_datasync_mock()
     mock_boto_client.return_value = mock_datasync
-    os.environ['DATASYNC_TASK_ARN'] = 'arn:aws:datasync:task-001'
+    monkeypatch.setenv(
+        "DAILY_DATASYNC_TASK_ARN",
+        "arn:aws:datasync:us-east-1:123456789012:task/daily-001",
+    )
 
-    # --- TRUCO TÉCNICO PARA MOCKEAR EXCEPCIONES DE AWS ---
-    # Como no estamos conectados a AWS, la clase 'client.exceptions' no existe.
-    # Tenemos que crear una clase falsa que se llame igual para engañar al código.
-    class MockInvalidRequestException(Exception):
-        pass
-    
-    # Inyectamos esta clase falsa dentro de nuestro actor
-    mock_datasync.exceptions.InvalidRequestException = MockInvalidRequestException
-    
-    # Le decimos al actor: "Cuando intenten ejecutar, LANZA este error"
-    mock_datasync.start_task_execution.side_effect = MockInvalidRequestException("La tarea ya está corriendo")
-    
-    # Ejecutamos
     response = lambda_handler({}, {})
-    
-    # Verificamos que el código atrapó el error y devolvió 400 (no explotó)
-    assert response['statusCode'] == 400
-    assert 'La tarea ya está corriendo' in response['body']
 
-@patch('boto3.client')
-def test_lambda_generic_exception(mock_boto_client):
-    """
-    CASO 4: ERROR FATAL (Error 500)
-    Simula una caída de red o error desconocido de AWS.
-    """
-    mock_datasync = MagicMock()
+    assert response["statusCode"] == 200
+    assert response["body"]["executionMode"] == "daily"
+    mock_datasync.start_task_execution.assert_called_once_with(
+        TaskArn="arn:aws:datasync:us-east-1:123456789012:task/daily-001",
+        OverrideOptions={
+            "BytesPerSecond": 20971520,
+            "LogLevel": "BASIC",
+            "OverwriteMode": "ALWAYS",
+            "PreserveDeletedFiles": "PRESERVE",
+            "TaskQueueing": "ENABLED",
+            "TransferMode": "CHANGED",
+            "VerifyMode": "POINT_IN_TIME_CONSISTENT",
+        },
+    )
+
+
+def test_lambda_missing_task_configuration():
+    response = lambda_handler({}, {})
+
+    assert response["statusCode"] == 400
+    assert "Falta configurar el ARN de DataSync para el modo daily" in response["body"]["message"]
+
+
+@patch("boto3.client")
+def test_lambda_historical_dry_run_with_filters(mock_boto_client, monkeypatch):
+    mock_datasync, _ = _build_datasync_mock()
     mock_boto_client.return_value = mock_datasync
-    os.environ['DATASYNC_TASK_ARN'] = 'arn:aws:datasync:task-001'
+    monkeypatch.setenv(
+        "HISTORICAL_DATASYNC_TASK_ARN",
+        "arn:aws:datasync:us-east-1:123456789012:task/historical-001",
+    )
 
-    # También definimos la excepción aquí para que no falle al intentar leer 'exceptions'
-    class MockInvalidRequestException(Exception):
-        pass
-    mock_datasync.exceptions.InvalidRequestException = MockInvalidRequestException
+    response = lambda_handler(
+        {
+            "dryRun": True,
+            "executionMode": "historical",
+            "includePatterns": ["Listado", "/TRTP-IN"],
+            "overrideOptions": {"BytesPerSecond": 7340032},
+        },
+        {},
+    )
 
-    # Simulamos un error genérico cualquiera
+    assert response["statusCode"] == 200
+    assert response["body"]["startTaskExecutionRequest"]["Includes"] == [{
+        "FilterType": "SIMPLE_PATTERN",
+        "Value": "/Listado|/TRTP-IN",
+    }]
+    assert response["body"]["startTaskExecutionRequest"]["OverrideOptions"]["TransferMode"] == "ALL"
+    assert response["body"]["startTaskExecutionRequest"]["OverrideOptions"]["BytesPerSecond"] == 7340032
+    mock_datasync.start_task_execution.assert_not_called()
+
+
+@patch("boto3.client")
+def test_lambda_invalid_request(mock_boto_client, monkeypatch):
+    mock_datasync, invalid_request_exception = _build_datasync_mock()
+    mock_datasync.start_task_execution.side_effect = invalid_request_exception("La tarea ya está corriendo")
+    mock_boto_client.return_value = mock_datasync
+    monkeypatch.setenv(
+        "DAILY_DATASYNC_TASK_ARN",
+        "arn:aws:datasync:us-east-1:123456789012:task/daily-001",
+    )
+
+    response = lambda_handler({}, {})
+
+    assert response["statusCode"] == 400
+    assert "La tarea ya está corriendo" in response["body"]["message"]
+
+
+@patch("boto3.client")
+def test_lambda_generic_exception(mock_boto_client, monkeypatch):
+    mock_datasync, _ = _build_datasync_mock()
     mock_datasync.start_task_execution.side_effect = Exception("Error de conexión fatal con AWS")
-    
-    # Verificamos que la Lambda deje pasar el error (raise) para que CloudWatch lo marque como FALLO
+    mock_boto_client.return_value = mock_datasync
+    monkeypatch.setenv(
+        "DAILY_DATASYNC_TASK_ARN",
+        "arn:aws:datasync:us-east-1:123456789012:task/daily-001",
+    )
+
     with pytest.raises(Exception) as excinfo:
         lambda_handler({}, {})
-    
+
     assert "Error de conexión fatal" in str(excinfo.value)
+
+
+@patch("boto3.client")
+def test_lambda_reads_secret_configuration(mock_boto_client, monkeypatch):
+    mock_datasync, _ = _build_datasync_mock()
+    mock_secrets = MagicMock()
+    mock_secrets.get_secret_value.return_value = {
+        "SecretString": (
+            '{"historical": {"includePatterns": ["/Listado", "reportes"], '
+            '"overrideOptions": {"BytesPerSecond": 15728640}}}'
+        )
+    }
+
+    def client_factory(service_name):
+        if service_name == "datasync":
+            return mock_datasync
+        if service_name == "secretsmanager":
+            return mock_secrets
+        raise ValueError(service_name)
+
+    mock_boto_client.side_effect = client_factory
+    monkeypatch.setenv(
+        "HISTORICAL_DATASYNC_TASK_ARN",
+        "arn:aws:datasync:us-east-1:123456789012:task/historical-001",
+    )
+    monkeypatch.setenv("ORCHESTRATOR_SECRET_ARN", "arn:aws:secretsmanager:us-east-1:123456789012:secret:ach/config")
+
+    response = lambda_handler({"executionMode": "historical"}, {})
+
+    assert response["statusCode"] == 200
+    mock_datasync.start_task_execution.assert_called_once_with(
+        TaskArn="arn:aws:datasync:us-east-1:123456789012:task/historical-001",
+        Includes=[{
+            "FilterType": "SIMPLE_PATTERN",
+            "Value": "/Listado|/reportes",
+        }],
+        OverrideOptions={
+            "BytesPerSecond": 15728640,
+            "LogLevel": "BASIC",
+            "OverwriteMode": "ALWAYS",
+            "PreserveDeletedFiles": "PRESERVE",
+            "TaskQueueing": "ENABLED",
+            "TransferMode": "ALL",
+            "VerifyMode": "POINT_IN_TIME_CONSISTENT",
+        },
+    )
+
+
+def test_lambda_rejects_invalid_execution_mode():
+    response = lambda_handler({"executionMode": "weekly"}, {})
+
+    assert response["statusCode"] == 400
+    assert "executionMode debe ser 'daily' o 'historical'" in response["body"]["message"]
+
+
+def test_lambda_rejects_invalid_override_option(monkeypatch):
+    monkeypatch.setenv(
+        "DAILY_DATASYNC_TASK_ARN",
+        "arn:aws:datasync:us-east-1:123456789012:task/daily-001",
+    )
+
+    response = lambda_handler(
+        {"overrideOptions": {"UnsupportedOption": True}},
+        {},
+    )
+
+    assert response["statusCode"] == 400
+    assert "UnsupportedOption" in response["body"]["message"]

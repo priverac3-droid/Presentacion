@@ -8,16 +8,12 @@
     "ParameterValue": "462297762050"
   },
   {
-    "ParameterKey": "VpcId",
-    "ParameterValue": "<<<< PEGAR ID DE VPC AQUÍ (ej. vpc-0a1b2c...) >>>>"
+    "ParameterKey": "BucketOrigenNombre",
+    "ParameterValue": "qa03-integrations-t1-batch-outputfiledirectory-462297762050"
   },
   {
-    "ParameterKey": "SubnetId",
-    "ParameterValue": "<<<< PEGAR ID DE SUBRED PRIVADA AQUÍ (ej. subnet-0x9y8z...) >>>>"
-  },
-  {
-    "ParameterKey": "SecurityGroupId",
-    "ParameterValue": "<<<< PEGAR ID DE SECURITY GROUP AQUÍ (ej. sg-010203...) >>>>"
+    "ParameterKey": "RutaOrigenACH",
+    "ParameterValue": "/replication/ACH/"
   },
   {
     "ParameterKey": "EmailNotificaciones",
@@ -25,7 +21,47 @@
   },
   {
     "ParameterKey": "RutaDestinoACH",
-    "ParameterValue": "/replication/ACH/"
+    "ParameterValue": "/ACH/"
+  },
+  {
+    "ParameterKey": "CrearBucketDestino",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "BucketDestinoNombre",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "BucketDestinoKmsKeyArn",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "ScheduleExpressionDaily",
+    "ParameterValue": "cron(0 1 * * ? *)"
+  },
+  {
+    "ParameterKey": "EnableDailySchedule",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "HistoricalThrottleBytesPerSecond",
+    "ParameterValue": "52428800"
+  },
+  {
+    "ParameterKey": "DailyThrottleBytesPerSecond",
+    "ParameterValue": "20971520"
+  },
+  {
+    "ParameterKey": "TaskReportSubdirectory",
+    "ParameterValue": "/reports/ach/"
+  },
+  {
+    "ParameterKey": "HabilitarObjectLock",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "OrchestratorSecretArn",
+    "ParameterValue": ""
   },
   {
     "ParameterKey": "BucketCodigoLambda",

@@ -8,16 +8,12 @@
     "ParameterValue": "817987897650"
   },
   {
-    "ParameterKey": "VpcId",
-    "ParameterValue": "<<<< BUSCAR EN CONSOLA DE PRODUCCIÓN >>>>"
+    "ParameterKey": "BucketOrigenNombre",
+    "ParameterValue": "prod-integrations-t1-batch-outputfiledirectory-817987897650"
   },
   {
-    "ParameterKey": "SubnetId",
-    "ParameterValue": "<<<< BUSCAR EN CONSOLA DE PRODUCCIÓN >>>>"
-  },
-  {
-    "ParameterKey": "SecurityGroupId",
-    "ParameterValue": "<<<< BUSCAR EN CONSOLA DE PRODUCCIÓN >>>>"
+    "ParameterKey": "RutaOrigenACH",
+    "ParameterValue": "/replication/ACH/"
   },
   {
     "ParameterKey": "EmailNotificaciones",
@@ -25,7 +21,47 @@
   },
   {
     "ParameterKey": "RutaDestinoACH",
-    "ParameterValue": "/replication/ACH/"
+    "ParameterValue": "/ACH/"
+  },
+  {
+    "ParameterKey": "CrearBucketDestino",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "BucketDestinoNombre",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "BucketDestinoKmsKeyArn",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "ScheduleExpressionDaily",
+    "ParameterValue": "cron(0 1 * * ? *)"
+  },
+  {
+    "ParameterKey": "EnableDailySchedule",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "HistoricalThrottleBytesPerSecond",
+    "ParameterValue": "52428800"
+  },
+  {
+    "ParameterKey": "DailyThrottleBytesPerSecond",
+    "ParameterValue": "20971520"
+  },
+  {
+    "ParameterKey": "TaskReportSubdirectory",
+    "ParameterValue": "/reports/ach/"
+  },
+  {
+    "ParameterKey": "HabilitarObjectLock",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "OrchestratorSecretArn",
+    "ParameterValue": ""
   },
   {
     "ParameterKey": "BucketCodigoLambda",
