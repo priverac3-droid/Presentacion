@@ -1,32 +1,45 @@
-PRERREQUISITO CRÍTICO: Política del Bucket Origen
-Esto es OBLIGATORIO. Si no se hace esto, cuando se intente correr DataSync desde QA, AWS dirá "Access Denied" porque la cuenta de Desarrollo (dueña de los datos) no conoce a la cuenta de QA.
+PRERREQUISITO OPERATIVO: revisa el modelo de acceso del bucket origen
 
-Acción: Debe ir a la cuenta de Desarrollo (507781971948), buscar el bucket dev3-integrations-t1-batch-outputfiledirectory-507781971948, ir a la pestaña Permissions -> Bucket Policy y agregar/pegar esto:
+La solucion actual trabaja por ambiente:
+- dev3 -> bucket origen dev3 -> bucket destino dev3
+- qa03 -> bucket origen qa03 -> bucket destino qa03
+- pdn  -> bucket origen pdn  -> bucket destino pdn
 
-JSON
+1) Si DataSync y el bucket origen viven en la misma cuenta
+   No necesitas una Bucket Policy cross-account adicional. El rol IAM de DataSync
+   definido en CloudFormation es suficiente para leer el origen y escribir en el
+   destino.
+
+2) Si decides reutilizar un bucket de otra cuenta
+   Debes autorizar explicitamente al rol de DataSync del stack para leer o escribir
+   sobre ese bucket. Usa una policy similar a esta y reemplaza los placeholders:
+
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "PermitirLecturaCrossAccountACH",
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": [
-                    "arn:aws:iam::462297762050:root",  
-                    "arn:aws:iam::817987897650:root"   
-                ]
-            },
-            "Action": [
-                "s3:GetBucketLocation",
-                "s3:ListBucket",
-                "s3:GetObject",
-                "s3:GetObjectTagging"
-            ],
-            "Resource": [
-                "arn:aws:s3:::dev3-integrations-t1-batch-outputfiledirectory-507781971948",
-                "arn:aws:s3:::dev3-integrations-t1-batch-outputfiledirectory-507781971948/*"
-            ]
-        }
-    ]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowDataSyncRoleAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<ACCOUNT_ID>:role/ach-datasync-role-<ambiente>-<region>"
+      },
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:GetObjectTagging",
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::<bucket-name>",
+        "arn:aws:s3:::<bucket-name>/*"
+      ]
+    }
+  ]
 }
-Explicación: Esta política dice: "Yo, Bucket de Desarrollo, autorizo a las cuentas de QA (...050) y Prod (...650) a leer mis archivos".
+
+3) Si reutilizas un bucket cifrado con SSE-KMS
+   Pasa el ARN de la llave en el parámetro BucketDestinoKmsKeyArn para que el rol
+   de DataSync pueda cifrar y descifrar objetos sin exponer ninguna credencial en
+   el repositorio.
