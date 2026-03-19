@@ -300,9 +300,7 @@ Resources:
                 Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource:
-                  - !GetAtt DataSyncLogGroup.Arn
-                  - !Sub "${DataSyncLogGroup.Arn}:*"
+                Resource: !GetAtt DataSyncLogGroup.Arn
 
   LocationOrigen:
     Type: AWS::DataSync::LocationS3
