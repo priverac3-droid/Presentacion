@@ -21,11 +21,11 @@
   },
   {
     "ParameterKey": "RutaDestinoACH",
-    "ParameterValue": "/ACH/"
+    "ParameterValue": "/RESPALDO_TEST_ACH/"
   },
   {
     "ParameterKey": "CrearBucketDestino",
-    "ParameterValue": "false"
+    "ParameterValue": "true"
   },
   {
     "ParameterKey": "BucketDestinoNombre",
