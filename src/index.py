@@ -231,8 +231,8 @@ def _build_start_request(event_payload):
         MODE_ENV_MAP.get(execution_mode, {}).get("override", "override"),
     )
     override_options = DEFAULT_OVERRIDE_OPTIONS.get(execution_mode, {}).copy()
-    override_options.update(_normalize_override_options(env_override_options))
     override_options.update(_normalize_override_options(secret_config.get("defaultOverrideOptions", {})))
+    override_options.update(_normalize_override_options(env_override_options))
     override_options.update(_normalize_override_options(mode_secret.get("overrideOptions", {})))
     override_options.update(_normalize_override_options(event_payload.get("overrideOptions", {})))
 
