@@ -28,7 +28,7 @@
       "Action": [
         "secretsmanager:GetSecretValue"
       ],
-      "Resource": "arn:aws:secretsmanager:<region>:<ACCOUNT_ID>:secret:ach/datasync/*"
+      "Resource": "arn:aws:secretsmanager:<region>:<ACCOUNT_ID>:secret:ach/*"
     }
   ]
 }
