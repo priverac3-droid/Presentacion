@@ -18,7 +18,7 @@ variables:
     value: 'SonarLts'
   # nombre del script de pruebas unitarias
   - name: unitTestCommand
-    value: 'coverage run -m pytest && coverage xml --omit=./venv/* && mkdir coverage && cp ./coverage.xml ./coverage/coverage.xml'
+    value: 'coverage erase && coverage run -m pytest && coverage xml --omit=./venv/* && mkdir -p coverage && cp ./coverage.xml ./coverage/coverage.xml'
   # Dependencias a instalar
   - name: path_dependencies_file
     value: 'requirements.txt'
@@ -79,7 +79,7 @@ stages:
         installLZ: false
     
     # Empaquetado estándar corporativo (.tar.gz)
-    - task: ArchiveFiles@1
+    - task: ArchiveFiles@2
       displayName: 'Preparando artefacto a publicar'
       inputs:
         rootFolder: '$(Build.Repository.LocalPath)'
