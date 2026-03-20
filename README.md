@@ -89,7 +89,7 @@ Los parametros versionados en el repositorio quedan asi:
 La ruta origen usada por defecto es:
 
 ```text
-/replication/ACH/
+replication/ACH/
 ```
 
 ## 5. Destino por ambiente y region
@@ -109,10 +109,12 @@ Ejemplos:
 La ruta destino usada por defecto es:
 
 ```text
-/ACH/
+(vacía)
 ```
 
-DataSync crea el prefijo si no existe. No hace falta crear carpetas manualmente.
+Con `RutaDestinoACH` vacía, DataSync copia directamente en la raíz del bucket
+destino todo lo que está dentro de `replication/ACH/`, sin crear una carpeta
+intermedia adicional como `ACH/` o `RESPALDO_TEST_ACH/`.
 
 ## 6. Seguridad
 
@@ -194,7 +196,7 @@ crear buckets nuevos. No se fuerza por defecto porque es irreversible.
 |---|---|
 | `BucketOrigenNombre` | Bucket origen del ambiente |
 | `RutaOrigenACH` | Prefijo origen |
-| `RutaDestinoACH` | Prefijo destino |
+| `RutaDestinoACH` | Prefijo destino; dejar vacío para copiar a la raíz |
 | `CrearBucketDestino` | Crear o reutilizar bucket destino |
 | `BucketDestinoNombre` | Nombre explicito del bucket destino |
 | `BucketDestinoKmsKeyArn` | CMK del bucket destino existente |
@@ -285,6 +287,17 @@ del release resuelva estos valores:
 Eso asume que la task usa el patron por defecto `#{variable}#` de Replace Tokens.
 Si el release usa otro patron, hay que configurarlo para que coincida o ajustar
 los tokens del archivo de parametros.
+
+### Estructura esperada del traspaso
+
+La expectativa funcional correcta es:
+
+- origen: `s3://.../replication/ACH/`
+- destino: bucket de respaldo
+- resultado: en la raíz del bucket destino deben quedar directamente carpetas como
+  `Listado/`, `reportes/`, `TDIR_IN_ERR/`, `TRTP-IN/`, etc.
+
+No se debe crear una carpeta contenedora adicional para el traspaso.
 
 ### Que si habria que cambiar mas adelante si quieren multi-region desde release
 
