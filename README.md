@@ -257,6 +257,35 @@ haría que CloudFormation intente retirar esos recursos del stack, lo que puede
 provocar rollback si el bucket ya tiene informacion o si la llave KMS sigue en
 uso.
 
+### Ruta alternativa si el stack principal queda bloqueado
+
+Si no puedes recuperar inmediatamente el stack principal y necesitas un despliegue
+nuevo en dev, el template ahora soporta una instancia paralela mediante el
+parámetro `ResourceNameSuffix`.
+
+Para ese caso:
+
+- usa un `stackName` nuevo en el release
+- usa el archivo `infra/parameters/params-dev3-parallel.json`
+- define una variable del release llamada `resourceNameSuffix`
+- asigna un valor corto y unico, por ejemplo `-1` o `-int2`
+
+Ese sufijo se agrega a los nombres fisicos de Lambda, roles IAM, alias KMS,
+reglas EventBridge, tareas DataSync, topic SNS y bucket destino por defecto para
+evitar colisiones con el stack principal.
+
+### Parametros del codigo Lambda en el release
+
+Los archivos `params-*.json` ya vienen preparados para que la task `Replace Tokens`
+del release resuelva estos valores:
+
+- `BucketCodigoLambda` -> `#{bucketName}#`
+- `KeyCodigoLambda` -> `respaldo-transversal/#{Build.BuildId}#.zip`
+
+Eso asume que la task usa el patron por defecto `#{variable}#` de Replace Tokens.
+Si el release usa otro patron, hay que configurarlo para que coincida o ajustar
+los tokens del archivo de parametros.
+
 ### Que si habria que cambiar mas adelante si quieren multi-region desde release
 
 Eso no es obligatorio para continuar con el flujo actual, pero si luego quieren

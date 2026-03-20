@@ -61,6 +61,13 @@ Parameters:
       ARN de la CMK del bucket destino existente si usa SSE-KMS. Dejar vacio si
       el bucket usa SSE-S3 o si la plantilla crea el bucket.
 
+  ResourceNameSuffix:
+    Type: String
+    Default: ''
+    Description: >
+      Sufijo opcional para permitir stacks paralelos sin colisionar nombres
+      fisicos. Usar vacio para el stack principal o un valor como -1, -int2.
+
   EmailNotificaciones:
     Type: String
     AllowedPattern: '^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
@@ -151,7 +158,7 @@ Resources:
     Condition: CreateDestinationBucket
     Type: AWS::KMS::Alias
     Properties:
-      AliasName: !Sub "alias/ach-backup-${AmbienteDespliegue}-${AWS::Region}"
+      AliasName: !Sub "alias/ach-backup-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
       TargetKeyId: !Ref KmsKeyReplicacion
 
   BucketDestinoACH:
@@ -162,7 +169,7 @@ Resources:
         - HasExplicitDestinationBucketName
         - !Ref BucketDestinoNombre
         - !Sub
-          - "b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+          - "b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
           - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
@@ -206,13 +213,13 @@ Resources:
   DataSyncLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/datasync/ach-backup-${AmbienteDespliegue}-${AWS::Region}"
+      LogGroupName: !Sub "/aws/datasync/ach-backup-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
       RetentionInDays: 30
 
   DataSyncRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "ach-datasync-role-${AmbienteDespliegue}-${AWS::Region}"
+      RoleName: !Sub "ach-datasync-role-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
       Description: Rol de DataSync para respaldo ACH dentro del mismo ambiente.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -253,7 +260,7 @@ Resources:
                       - HasExplicitDestinationBucketName
                       - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
                       - !Sub
-                        - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+                        - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
                         - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
               - Sid: DestinationBucketObjects
                 Effect: Allow
@@ -271,7 +278,7 @@ Resources:
                       - HasExplicitDestinationBucketName
                       - !Sub "arn:aws:s3:::${BucketDestinoNombre}/*"
                       - !Sub
-                        - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}/*"
+                        - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}/*"
                         - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
               - !If
                 - CreateDestinationBucket
@@ -324,7 +331,7 @@ Resources:
             - HasExplicitDestinationBucketName
             - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
             - !Sub
-              - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+              - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
               - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
       Subdirectory: !Ref RutaDestinoACH
       S3Config:
@@ -336,7 +343,7 @@ Resources:
   HistoricalDataSyncTask:
     Type: AWS::DataSync::Task
     Properties:
-      Name: !Sub "migracion-ach-historical-${AmbienteDespliegue}-${AWS::Region}"
+      Name: !Sub "migracion-ach-historical-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
       SourceLocationArn: !Ref LocationOrigen
       DestinationLocationArn: !Ref LocationDestino
       CloudWatchLogGroupArn: !GetAtt DataSyncLogGroup.Arn
@@ -361,7 +368,7 @@ Resources:
                   - HasExplicitDestinationBucketName
                   - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
                   - !Sub
-                    - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+                    - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
                     - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
             Subdirectory: !Ref TaskReportSubdirectory
         ObjectVersionIds: NONE
@@ -380,7 +387,7 @@ Resources:
   DailyDataSyncTask:
     Type: AWS::DataSync::Task
     Properties:
-      Name: !Sub "migracion-ach-daily-${AmbienteDespliegue}-${AWS::Region}"
+      Name: !Sub "migracion-ach-daily-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
       SourceLocationArn: !Ref LocationOrigen
       DestinationLocationArn: !Ref LocationDestino
       CloudWatchLogGroupArn: !GetAtt DataSyncLogGroup.Arn
@@ -405,7 +412,7 @@ Resources:
                   - HasExplicitDestinationBucketName
                   - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
                   - !Sub
-                    - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+                    - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
                     - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
             Subdirectory: !Ref TaskReportSubdirectory
         ObjectVersionIds: NONE
@@ -424,8 +431,8 @@ Resources:
   SnsTopicAlertas:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: !Sub "ach-alertas-falla-${AmbienteDespliegue}-${AWS::Region}"
-      DisplayName: !Sub "Alerta ACH ${AmbienteDespliegue} ${AWS::Region}"
+      TopicName: !Sub "ach-alertas-falla-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
+      DisplayName: !Sub "Alerta ACH ${AmbienteDespliegue} ${AWS::Region}${ResourceNameSuffix}"
 
   SnsSubscription:
     Type: AWS::SNS::Subscription
@@ -452,7 +459,7 @@ Resources:
   DataSyncFailureRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub "ach-monitoreo-fallas-${AmbienteDespliegue}-${AWS::Region}"
+      Name: !Sub "ach-monitoreo-fallas-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
       Description: Notifica por SNS si alguna tarea DataSync de ACH falla.
       EventPattern:
         source:
@@ -484,7 +491,7 @@ Resources:
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "ach-lambda-role-${AmbienteDespliegue}-${AWS::Region}"
+      RoleName: !Sub "ach-lambda-role-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -508,7 +515,7 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ach-datasync-trigger-${AmbienteDespliegue}:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ach-datasync-trigger-${AmbienteDespliegue}${ResourceNameSuffix}:*"
               - Sid: StartHistoricalAndDailyTasks
                 Effect: Allow
                 Action:
@@ -528,7 +535,7 @@ Resources:
   OrquestadorLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "ach-datasync-trigger-${AmbienteDespliegue}"
+      FunctionName: !Sub "ach-datasync-trigger-${AmbienteDespliegue}${ResourceNameSuffix}"
       Description: Orquestador de DataSync para carga historica y sincronizacion diaria.
       Runtime: python3.12
       Handler: index.lambda_handler
@@ -559,7 +566,7 @@ Resources:
     Condition: EnableDailyScheduleCondition
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub "ach-datasync-daily-${AmbienteDespliegue}-${AWS::Region}"
+      Name: !Sub "ach-datasync-daily-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
       Description: Invoca la Lambda orquestadora para el batch diario.
       ScheduleExpression: !Ref ScheduleExpressionDaily
       State: ENABLED
@@ -589,7 +596,7 @@ Outputs:
           - HasExplicitDestinationBucketName
           - !Ref BucketDestinoNombre
           - !Sub
-            - "b1-${RegionShort}-${AmbienteDespliegue}-coreb-backuptransversal-${CuentaDestinoID}"
+            - "b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
             - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
 
   DailyDataSyncTaskArn:
