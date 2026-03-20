@@ -334,6 +334,32 @@ Eso asume que la task usa el patron por defecto `#{variable}#` de Replace Tokens
 Si el release usa otro patron, hay que configurarlo para que coincida o ajustar
 los tokens del archivo de parametros.
 
+### Bucket S3 del ZIP (release) y error "Bucket does not exist"
+
+La tarea **Amazon S3 Upload** del release debe apuntar a un bucket **existente** en
+la cuenta y region correctas, con permisos para `PutObject`. El token `bucketName`
+sustituye `BucketCodigoLambda` en los `params-*.json`; **no** es el bucket de datos
+ACH ni el transversal.
+
+**Cuentas destino por ambiente** (deben coincidir con `infra/parameters/`):
+
+| Ambiente | ID de cuenta (ejemplo) |
+| --- | --- |
+| dev3 | `507781971948` |
+| qa03 | `462297762050` |
+| pdn | `817987897650` |
+
+Si al correr el stage de **QA** el log muestra un bucket con sufijo **`-dev-`** y
+cuenta `507781971948` (por ejemplo `aws-useast1-dev-507781971948`), el release
+sigue usando la variable de **dev**: hay que definir **otra** variable de bucket
+por stage (p. ej. `bucketNameQa`) o scope por ambiente, y que QA resuelva al
+bucket de artefactos en la cuenta **462297762050**, no al de dev.
+
+Si el nombre de bucket es el correcto pero el error continua: crear el bucket en
+S3 en `us-east-1`, o habilitar la opcion de auto-creacion de la tarea solo si la
+politica de la empresa lo permite. Verificar que el service connection asuma un
+rol con acceso a ese bucket.
+
 ### Estructura esperada del traspaso
 
 La expectativa funcional correcta es:
