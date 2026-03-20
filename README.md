@@ -50,16 +50,19 @@ La solucion queda dividida en dos flujos:
 
 - La Lambda `ach-datasync-trigger-{ambiente}` se invoca manualmente con
   `executionMode=historical`
-- La Lambda dispara la tarea `HistoricalDataSyncTask`
-- Esa tarea ejecuta una copia completa (`TransferMode=ALL`)
-- Se preserva el historico en destino y no se borra el origen
+- La Lambda lista los objetos del origen bajo `replication/ACH/`
+- Filtra solo objetos con `LastModified` anterior a `2026-02-01T00:00:00Z`
+- Genera un manifest CSV en `_datasync/manifests/`
+- Dispara `HistoricalDataSyncTask` usando ese manifest
+- Cuando DataSync termina en `SUCCESS`, la misma Lambda elimina del origen los
+  objetos transferidos y deja marcadores de carpeta vacios
 
 ### Fase 2: batch diario
 
 - EventBridge invoca la misma Lambda con `executionMode=daily`
-- La Lambda dispara la tarea `DailyDataSyncTask`
-- Esa tarea usa `TransferMode=CHANGED`
-- Solo replica cambios nuevos o modificados
+- La Lambda vuelve a construir un manifest con los objetos elegibles
+- DataSync transfiere solo el conjunto listado en el manifest
+- Tras un `SUCCESS`, la Lambda limpia el origen para mantener semantica de traslado
 
 ## 3. Arquitectura resultante
 
@@ -73,6 +76,7 @@ Por cada ambiente y por cada region desplegada, el stack crea o reutiliza:
 - una tarea DataSync diaria
 - una Lambda orquestadora
 - una regla EventBridge para el batch diario
+- una regla EventBridge adicional para limpiar el origen tras un exito de DataSync
 - reportes DataSync en S3
 - alertas SNS por fallo
 
@@ -109,12 +113,28 @@ Ejemplos:
 La ruta destino usada por defecto es:
 
 ```text
-(vacía)
+ACH/
 ```
 
-Con `RutaDestinoACH` vacía, DataSync copia directamente en la raíz del bucket
-destino todo lo que está dentro de `replication/ACH/`, sin crear una carpeta
-intermedia adicional como `ACH/` o `RESPALDO_TEST_ACH/`.
+Con `RutaDestinoACH=ACH/`, DataSync copia el contenido de
+`replication/ACH/` hacia:
+
+```text
+bucket-destino/ACH/
+```
+
+de forma que queden carpetas como:
+
+```text
+ACH/Listado/
+ACH/reportes/
+ACH/TDIR_IN_ERR/
+ACH/TDIR_IN_HIS/
+ACH/TDIR_OUT_HIS/
+ACH/TDIR-OUT/
+ACH/TRTP-IN/
+ACH/TRTP-OUT/
+```
 
 ## 6. Seguridad
 
@@ -168,10 +188,15 @@ La solucion deja trazabilidad en varias capas:
 
 - CloudWatch Logs para Lambda
 - CloudWatch Logs para DataSync
+- manifests de DataSync en:
+
+```text
+_datasync/manifests/
+```
 - task reports de DataSync en:
 
 ```text
-/reports/ach/
+_datasync/task-reports/
 ```
 
 - SNS con notificacion por email cuando una tarea falle
@@ -196,14 +221,17 @@ crear buckets nuevos. No se fuerza por defecto porque es irreversible.
 |---|---|
 | `BucketOrigenNombre` | Bucket origen del ambiente |
 | `RutaOrigenACH` | Prefijo origen |
-| `RutaDestinoACH` | Prefijo destino; dejar vacío para copiar a la raíz |
+| `RutaDestinoACH` | Prefijo destino; usar `ACH/` |
 | `CrearBucketDestino` | Crear o reutilizar bucket destino |
 | `BucketDestinoNombre` | Nombre explicito del bucket destino |
 | `BucketDestinoKmsKeyArn` | CMK del bucket destino existente |
+| `DeleteTransferredSourceObjects` | Elimina del origen lo ya transferido |
+| `ManifestSubdirectory` | Ruta donde la Lambda escribe manifests |
 | `ScheduleExpressionDaily` | Cron del batch diario |
 | `HistoricalThrottleBytesPerSecond` | Limite historico |
 | `DailyThrottleBytesPerSecond` | Limite diario |
 | `TaskReportSubdirectory` | Ruta de reportes |
+| `TransferLastModifiedBefore` | Corte por fecha para incluir solo historico |
 | `OrchestratorSecretArn` | Secreto opcional del orquestador |
 
 ## 10. Flujo oficial de despliegue
@@ -252,12 +280,13 @@ Si dev ya desplego bien con el release actual, no hace falta tocar de inmediato:
 
 ### Compatibilidad con stacks ya existentes
 
-Si un ambiente ya fue desplegado antes con la version inicial del template y el
-stack ya administra el bucket destino y la CMK asociados, mantén
-`CrearBucketDestino=true` en ese ambiente. Cambiarlo a `false` durante un update
-haría que CloudFormation intente retirar esos recursos del stack, lo que puede
-provocar rollback si el bucket ya tiene informacion o si la llave KMS sigue en
-uso.
+Si un ambiente ya tiene bucket destino creado y quieres reutilizarlo, usa:
+
+- `CrearBucketDestino=false`
+- `BucketDestinoNombre=<bucket-existente>`
+
+En dev3, los parametros quedaron preparados para reutilizar el bucket
+`b1-useast1-dev3-coreb-backuptransversal-507781971948`.
 
 ### Ruta alternativa si el stack principal queda bloqueado
 
@@ -293,11 +322,15 @@ los tokens del archivo de parametros.
 La expectativa funcional correcta es:
 
 - origen: `s3://.../replication/ACH/`
-- destino: bucket de respaldo
-- resultado: en la raíz del bucket destino deben quedar directamente carpetas como
-  `Listado/`, `reportes/`, `TDIR_IN_ERR/`, `TRTP-IN/`, etc.
+- destino: `s3://bucket-respaldo/ACH/`
+- resultado: dentro del destino deben quedar carpetas funcionales bajo `ACH/`,
+  como `ACH/Listado/`, `ACH/reportes/`, `ACH/TDIR_IN_ERR/`, `ACH/TRTP-IN/`, etc.
+- del origen se trasladan los objetos elegibles y luego se eliminan, dejando las
+  carpetas visibles pero sin data util
+- no se deben mover objetos con fecha de febrero 2026 en adelante
 
-No se debe crear una carpeta contenedora adicional para el traspaso.
+No se debe crear una carpeta contenedora adicional distinta de `ACH/`, ni mezclar
+los task reports/manifests tecnicos con la data del respaldo.
 
 ### Que si habria que cambiar mas adelante si quieren multi-region desde release
 
@@ -354,6 +387,8 @@ aws lambda invoke \
 
 No requiere invocacion manual cuando `EnableDailySchedule=true`, porque
 EventBridge ejecuta la Lambda con el cron configurado en `ScheduleExpressionDaily`.
+La Lambda vuelve a evaluar el corte por fecha y solo incluye en el manifest los
+objetos elegibles antes de iniciar DataSync.
 
 ## 12. Pipeline de build
 
@@ -368,8 +403,8 @@ No despliega a AWS directamente. El despliegue lo hace el release clasico.
 
 ## 13. Notas operativas
 
-- Para dev3 y pdn los parametros vienen preparados para reutilizar un bucket destino
-- Para qa03 los parametros vienen preparados para crear el bucket destino si no existe
+- Para dev3 los parametros vienen preparados para reutilizar el bucket destino existente
+- Para qa03 y pdn puedes decidir entre reutilizar o crear bucket segun el ambiente
 - Si el nombre real del bucket destino no coincide con la convencion estandar, define
   `BucketDestinoNombre`
 - Si el bucket destino existente usa SSE-KMS, define `BucketDestinoKmsKeyArn`

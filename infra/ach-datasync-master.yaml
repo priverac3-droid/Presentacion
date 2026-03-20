@@ -36,10 +36,10 @@ Parameters:
 
   RutaDestinoACH:
     Type: String
-    Default: ''
+    Default: ACH/
     Description: >
-      Prefijo destino dentro del bucket transversal. Déjalo vacío para copiar
-      el contenido directamente en la raíz del bucket.
+      Prefijo destino dentro del bucket transversal. Debe apuntar a ACH/ para
+      que la data quede en ACH/Listado, ACH/reportes, etc.
 
   CrearBucketDestino:
     Type: String
@@ -62,6 +62,21 @@ Parameters:
     Description: >
       ARN de la CMK del bucket destino existente si usa SSE-KMS. Dejar vacio si
       el bucket usa SSE-S3 o si la plantilla crea el bucket.
+
+  DeleteTransferredSourceObjects:
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+    Description: >
+      Cuando es true, la Lambda elimina del origen los objetos transferidos
+      despues de una ejecucion DataSync exitosa.
+
+  ManifestSubdirectory:
+    Type: String
+    Default: _datasync/manifests/
+    Description: Prefijo S3 donde la Lambda guarda los manifests para DataSync.
 
   ResourceNameSuffix:
     Type: String
@@ -98,9 +113,16 @@ Parameters:
     Default: 20971520
     Description: Limite de ancho de banda para la sincronizacion diaria.
 
+  TransferLastModifiedBefore:
+    Type: String
+    Default: '2026-02-01T00:00:00Z'
+    Description: >
+      Solo se transfieren objetos con LastModified anterior a este timestamp UTC.
+      Deja el valor vacio para no aplicar corte por fecha.
+
   TaskReportSubdirectory:
     Type: String
-    Default: reports/ach/
+    Default: _datasync/task-reports/
     Description: Prefijo donde DataSync almacenara los task reports para auditoria.
 
   HabilitarObjectLock:
@@ -130,12 +152,17 @@ Parameters:
 
 Conditions:
   CreateDestinationBucket: !Equals [!Ref CrearBucketDestino, 'true']
+  DeleteTransferredSourceObjectsEnabled: !Equals [!Ref DeleteTransferredSourceObjects, 'true']
   HasExplicitDestinationBucketName: !Not [!Equals [!Ref BucketDestinoNombre, '']]
   HasDestinationBucketKmsKey: !Not [!Equals [!Ref BucketDestinoKmsKeyArn, '']]
   HasDestinationSubdirectory: !Not [!Equals [!Ref RutaDestinoACH, '']]
+  HasManifestSubdirectory: !Not [!Equals [!Ref ManifestSubdirectory, '']]
   HasOrchestratorSecret: !Not [!Equals [!Ref OrchestratorSecretArn, '']]
   HasSourceSubdirectory: !Not [!Equals [!Ref RutaOrigenACH, '']]
   HasTaskReportSubdirectory: !Not [!Equals [!Ref TaskReportSubdirectory, '']]
+  ReuseExistingDestinationBucketWithoutExplicitKmsKey: !And
+    - !Not [!Condition CreateDestinationBucket]
+    - !Not [!Condition HasDestinationBucketKmsKey]
   EnableDailyScheduleCondition: !Equals [!Ref EnableDailySchedule, 'true']
   EnableObjectLockOnNewBucket: !And
     - !Condition CreateDestinationBucket
@@ -308,6 +335,17 @@ Resources:
                     - kms:Encrypt
                     - kms:GenerateDataKey
                   Resource: !Ref BucketDestinoKmsKeyArn
+                - !Ref 'AWS::NoValue'
+              - !If
+                - ReuseExistingDestinationBucketWithoutExplicitKmsKey
+                - Sid: DestinationBucketKmsFallback
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                  Resource: '*'
                 - !Ref 'AWS::NoValue'
               - Sid: DataSyncLogging
                 Effect: Allow
@@ -489,6 +527,27 @@ Resources:
               state: $.detail.State
             InputTemplate: '"ALERTA ACH\n------------------------------------------------\nLa tarea de respaldo reporto un error.\nTaskExecutionArn: <executionArn>\nEstado: <state>\nDetalle: <result>"'
 
+  DataSyncSuccessRule:
+    Condition: DeleteTransferredSourceObjectsEnabled
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "ach-monitoreo-exitos-${AmbienteDespliegue}-${AWS::Region}${ResourceNameSuffix}"
+      Description: Invoca la Lambda para limpiar el origen tras una ejecucion DataSync exitosa.
+      EventPattern:
+        source:
+          - aws.datasync
+        detail-type:
+          - DataSync Task Execution State Change
+        resources:
+          - prefix: !Sub "${HistoricalDataSyncTask}/execution/"
+          - prefix: !Sub "${DailyDataSyncTask}/execution/"
+        detail:
+          State:
+            - SUCCESS
+      Targets:
+        - Arn: !GetAtt OrquestadorLambda.Arn
+          Id: CleanupSourceObjects
+
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -524,6 +583,87 @@ Resources:
                 Resource:
                   - !Ref HistoricalDataSyncTask
                   - !Ref DailyDataSyncTask
+              - Sid: DescribeDataSyncTaskExecutions
+                Effect: Allow
+                Action:
+                  - datasync:DescribeTaskExecution
+                Resource: '*'
+              - Sid: SourceBucketMetadataManagement
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !Sub "arn:aws:s3:::${BucketOrigenNombre}"
+              - Sid: SourceBucketObjectManagement
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${BucketOrigenNombre}/*"
+              - Sid: DestinationManifestBucketMetadata
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !If
+                  - CreateDestinationBucket
+                  - !GetAtt BucketDestinoACH.Arn
+                  - !If
+                    - HasExplicitDestinationBucketName
+                    - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
+                    - !Sub
+                      - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
+                      - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+              - Sid: DestinationManifestObjectManagement
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !If
+                    - CreateDestinationBucket
+                    - !Sub "${BucketDestinoACH.Arn}/*"
+                    - !If
+                      - HasExplicitDestinationBucketName
+                      - !Sub "arn:aws:s3:::${BucketDestinoNombre}/*"
+                      - !Sub
+                        - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}/*"
+                        - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+              - !If
+                - CreateDestinationBucket
+                - Sid: LambdaManagedDestinationKms
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                  Resource: !GetAtt KmsKeyReplicacion.Arn
+                - !Ref 'AWS::NoValue'
+              - !If
+                - HasDestinationBucketKmsKey
+                - Sid: LambdaProvidedDestinationKms
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                  Resource: !Ref BucketDestinoKmsKeyArn
+                - !Ref 'AWS::NoValue'
+              - !If
+                - ReuseExistingDestinationBucketWithoutExplicitKmsKey
+                - Sid: LambdaDestinationKmsFallback
+                  Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                    - kms:Encrypt
+                    - kms:GenerateDataKey
+                  Resource: '*'
+                - !Ref 'AWS::NoValue'
               - !If
                 - HasOrchestratorSecret
                 - Sid: ReadOrchestratorSecret
@@ -555,13 +695,30 @@ Resources:
             {"BytesPerSecond": ${DailyThrottleBytesPerSecond}}
           DEFAULT_EXCLUDE_PATTERNS: ''
           DEFAULT_INCLUDE_PATTERNS: ''
+          DATASYNC_ACCESS_ROLE_ARN: !GetAtt DataSyncRole.Arn
           HISTORICAL_DATASYNC_TASK_ARN: !Ref HistoricalDataSyncTask
           HISTORICAL_EXCLUDE_PATTERNS: ''
           HISTORICAL_INCLUDE_PATTERNS: ''
           HISTORICAL_OVERRIDE_OPTIONS_JSON: !Sub |
             {"BytesPerSecond": ${HistoricalThrottleBytesPerSecond}}
           LOG_LEVEL: INFO
+          MANIFEST_SUBDIRECTORY: !Ref ManifestSubdirectory
           ORCHESTRATOR_SECRET_ARN: !Ref OrchestratorSecretArn
+          SOURCE_BUCKET_NAME: !Ref BucketOrigenNombre
+          SOURCE_PREFIX: !Ref RutaOrigenACH
+          TRANSFER_LAST_MODIFIED_BEFORE: !Ref TransferLastModifiedBefore
+          DELETE_TRANSFERRED_SOURCE_OBJECTS: !Ref DeleteTransferredSourceObjects
+          DESTINATION_BUCKET_NAME:
+            !If
+              - CreateDestinationBucket
+              - !Ref BucketDestinoACH
+              - !If
+                - HasExplicitDestinationBucketName
+                - !Ref BucketDestinoNombre
+                - !Sub
+                  - "b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
+                  - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+          DESTINATION_PREFIX: !Ref RutaDestinoACH
 
   DailyOrchestratorRule:
     Condition: EnableDailyScheduleCondition
@@ -585,6 +742,15 @@ Resources:
       FunctionName: !Ref OrquestadorLambda
       Principal: events.amazonaws.com
       SourceArn: !GetAtt DailyOrchestratorRule.Arn
+
+  PermissionForDataSyncSuccessRuleInvokeLambda:
+    Condition: DeleteTransferredSourceObjectsEnabled
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OrquestadorLambda
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DataSyncSuccessRule.Arn
 
 Outputs:
   DestinationBucketName:
