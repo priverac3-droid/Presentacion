@@ -76,7 +76,9 @@ Parameters:
   ManifestSubdirectory:
     Type: String
     Default: _datasync/manifests/
-    Description: Prefijo S3 donde la Lambda guarda los manifests para DataSync.
+    Description: >
+      Prefijo en el bucket destino donde la Lambda escribe los manifests (no es data ACH).
+      Convive con ACH/; no replica el prefijo replication/ del origen.
 
   ResourceNameSuffix:
     Type: String
@@ -123,7 +125,9 @@ Parameters:
   TaskReportSubdirectory:
     Type: String
     Default: _datasync/task-reports/
-    Description: Prefijo donde DataSync almacenara los task reports para auditoria.
+    Description: >
+      Prefijo en el bucket destino para informes de ejecucion de DataSync (p. ej. Summary-Reports).
+      Dejar vacio para desactivar reportes en S3 (solo logs en CloudWatch). No es data ACH.
 
   HabilitarObjectLock:
     Type: String
@@ -401,33 +405,35 @@ Resources:
         TaskQueueing: ENABLED
         TransferMode: ALL
         VerifyMode: POINT_IN_TIME_CONSISTENT
-      TaskReportConfig:
-        Destination:
-          S3:
-            BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
-            S3BucketArn:
-              !If
-                - CreateDestinationBucket
-                - !GetAtt BucketDestinoACH.Arn
-                - !If
-                  - HasExplicitDestinationBucketName
-                  - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
-                  - !Sub
-                    - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
-                    - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
-            Subdirectory: !If [HasTaskReportSubdirectory, !Ref TaskReportSubdirectory, !Ref 'AWS::NoValue']
-        ObjectVersionIds: NONE
-        OutputType: STANDARD
-        Overrides:
-          Deleted:
-            ReportLevel: ERRORS_ONLY
-          Skipped:
-            ReportLevel: SUCCESSES_AND_ERRORS
-          Transferred:
-            ReportLevel: SUCCESSES_AND_ERRORS
-          Verified:
-            ReportLevel: SUCCESSES_AND_ERRORS
-        ReportLevel: SUCCESSES_AND_ERRORS
+      TaskReportConfig: !If
+        - HasTaskReportSubdirectory
+        - Destination:
+            S3:
+              BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
+              S3BucketArn:
+                !If
+                  - CreateDestinationBucket
+                  - !GetAtt BucketDestinoACH.Arn
+                  - !If
+                    - HasExplicitDestinationBucketName
+                    - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
+                    - !Sub
+                      - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
+                      - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+              Subdirectory: !Ref TaskReportSubdirectory
+          ObjectVersionIds: NONE
+          OutputType: STANDARD
+          Overrides:
+            Deleted:
+              ReportLevel: ERRORS_ONLY
+            Skipped:
+              ReportLevel: SUCCESSES_AND_ERRORS
+            Transferred:
+              ReportLevel: SUCCESSES_AND_ERRORS
+            Verified:
+              ReportLevel: SUCCESSES_AND_ERRORS
+          ReportLevel: SUCCESSES_AND_ERRORS
+        - !Ref AWS::NoValue
 
   DailyDataSyncTask:
     Type: AWS::DataSync::Task
@@ -445,33 +451,35 @@ Resources:
         TaskQueueing: ENABLED
         TransferMode: CHANGED
         VerifyMode: POINT_IN_TIME_CONSISTENT
-      TaskReportConfig:
-        Destination:
-          S3:
-            BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
-            S3BucketArn:
-              !If
-                - CreateDestinationBucket
-                - !GetAtt BucketDestinoACH.Arn
-                - !If
-                  - HasExplicitDestinationBucketName
-                  - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
-                  - !Sub
-                    - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
-                    - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
-            Subdirectory: !If [HasTaskReportSubdirectory, !Ref TaskReportSubdirectory, !Ref 'AWS::NoValue']
-        ObjectVersionIds: NONE
-        OutputType: STANDARD
-        Overrides:
-          Deleted:
-            ReportLevel: ERRORS_ONLY
-          Skipped:
-            ReportLevel: SUCCESSES_AND_ERRORS
-          Transferred:
-            ReportLevel: SUCCESSES_AND_ERRORS
-          Verified:
-            ReportLevel: SUCCESSES_AND_ERRORS
-        ReportLevel: SUCCESSES_AND_ERRORS
+      TaskReportConfig: !If
+        - HasTaskReportSubdirectory
+        - Destination:
+            S3:
+              BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
+              S3BucketArn:
+                !If
+                  - CreateDestinationBucket
+                  - !GetAtt BucketDestinoACH.Arn
+                  - !If
+                    - HasExplicitDestinationBucketName
+                    - !Sub "arn:aws:s3:::${BucketDestinoNombre}"
+                    - !Sub
+                      - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
+                      - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
+              Subdirectory: !Ref TaskReportSubdirectory
+          ObjectVersionIds: NONE
+          OutputType: STANDARD
+          Overrides:
+            Deleted:
+              ReportLevel: ERRORS_ONLY
+            Skipped:
+              ReportLevel: SUCCESSES_AND_ERRORS
+            Transferred:
+              ReportLevel: SUCCESSES_AND_ERRORS
+            Verified:
+              ReportLevel: SUCCESSES_AND_ERRORS
+          ReportLevel: SUCCESSES_AND_ERRORS
+        - !Ref AWS::NoValue
 
   SnsTopicAlertas:
     Type: AWS::SNS::Topic

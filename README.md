@@ -123,7 +123,22 @@ Con `RutaDestinoACH=ACH/`, DataSync copia el contenido de
 bucket-destino/ACH/
 ```
 
-de forma que queden carpetas como:
+**No se crea** una carpeta `replication/` en el destino: el prefijo `replication/ACH/`
+del origen es solo la ruta de lectura; lo que va al transversal queda bajo `ACH/`.
+
+### ¿Por qué también aparece `_datasync/` en el bucket destino?
+
+Eso **no** es la copia del árbol `replication/` ni un fallo de mapeo. Son prefijos **operativos**, separados de la data ACH:
+
+| Prefijo | Quién lo escribe | Propósito |
+| --- | --- | --- |
+| `ACH/` | DataSync | Datos de negocio (Listado, reportes, TDIR_*, TRTP-*, etc.) |
+| `_datasync/manifests/` | Lambda | Manifiestos CSV que usa DataSync para saber qué objetos transferir |
+| `_datasync/task-reports/` (p. ej. `Summary-Reports/`) | DataSync | Informes de ejecución / auditoría de la tarea |
+
+Si en el origen debe quedar solo la **estructura de carpetas vacías** tras el traslado, eso lo hace la Lambda al borrar objetos transferidos y recrear marcadores de carpeta; el corte por **fecha** se controla con `TransferLastModifiedBefore` (objetos con `LastModified` en febrero 2026 o posteriores no entran al manifiesto histórico con el valor por defecto del template).
+
+En el destino, bajo `ACH/`, la estructura típica queda así:
 
 ```text
 ACH/Listado/
@@ -198,6 +213,8 @@ _datasync/manifests/
 ```text
 _datasync/task-reports/
 ```
+
+  (Si en el stack pones `TaskReportSubdirectory` vacío, DataSync no escribe esos informes en S3.)
 
 - SNS con notificacion por email cuando una tarea falle
 
@@ -327,10 +344,10 @@ La expectativa funcional correcta es:
   como `ACH/Listado/`, `ACH/reportes/`, `ACH/TDIR_IN_ERR/`, `ACH/TRTP-IN/`, etc.
 - del origen se trasladan los objetos elegibles y luego se eliminan, dejando las
   carpetas visibles pero sin data util
-- no se deben mover objetos con fecha de febrero 2026 en adelante
+- no se deben mover objetos con fecha de febrero 2026 en adelante (según el corte configurado)
 
-No se debe crear una carpeta contenedora adicional distinta de `ACH/`, ni mezclar
-los task reports/manifests tecnicos con la data del respaldo.
+La data de respaldo vive solo bajo `ACH/`. Los manifests y task reports no se mezclan
+con esas rutas: usan el prefijo `_datasync/`, que es solo trazabilidad técnica.
 
 ### Que si habria que cambiar mas adelante si quieren multi-region desde release
 
