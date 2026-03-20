@@ -507,8 +507,21 @@ No despliega a AWS directamente. El despliegue lo hace el release clasico.
 Si agregas una tarea **Amazon S3 Upload** que use `$(bucketName)`, define la
 variable en el bloque `variables:` del YAML (como en este repo, p. ej.
 `bucketName: aws-useast1-qa-462297762050`) o en la pestaña **Variables** del
-pipeline en Azure DevOps. Sin eso, el build falla con “undefined variable
-bucketName”.
+**pipeline de build** en Azure DevOps. Sin eso, el build falla con “undefined
+variable bucketName”.
+
+**Build vs Release (clasico):** Las variables que ves en un **Release** con
+**Scope** por etapa (p. ej. `INT-DEPLOY`, `QA-DEPLOY`) **no** se inyectan en el
+**Build** YAML. Son contextos distintos: el job de compilacion no lee las
+variables del release. Si la tarea S3 Upload esta en el **build**, hace falta
+`bucketName` en el YAML o en Variables del **mismo** pipeline de build. Si la
+tarea esta solo en el **release**, usa las variables con scope del stage
+correspondiente y ahi no aplica el error del YAML de build.
+
+**Valores por stage:** Revisa que el bucket en `QA-DEPLOY` exista y sea el
+correcto para subir el ZIP (nombres corporativos tipo `*-cfn-sam-template-upload-*`
+suelen ser distintos de `aws-useast1-qa-*`; deben coincidir con el bucket real
+en S3).
 
 ## 13. Notas operativas
 
