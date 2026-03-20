@@ -64,11 +64,15 @@
     "ParameterValue": ""
   },
   {
+    "ParameterKey": "ResourceNameSuffix",
+    "ParameterValue": ""
+  },
+  {
     "ParameterKey": "BucketCodigoLambda",
-    "ParameterValue": "ESTE_VALOR_LO_CAMBIA_EL_PIPELINE_AUTOMATICAMENTE"
+    "ParameterValue": "#{bucketName}#"
   },
   {
     "ParameterKey": "KeyCodigoLambda",
-    "ParameterValue": "ESTE_VALOR_LO_CAMBIA_EL_PIPELINE_AUTOMATICAMENTE"
+    "ParameterValue": "respaldo-transversal/#{Build.BuildId}#.zip"
   }
 ]

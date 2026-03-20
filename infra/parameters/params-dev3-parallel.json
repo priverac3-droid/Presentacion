@@ -1,15 +1,15 @@
 [
   {
     "ParameterKey": "AmbienteDespliegue",
-    "ParameterValue": "pdn"
+    "ParameterValue": "dev3"
   },
   {
     "ParameterKey": "CuentaDestinoID",
-    "ParameterValue": "817987897650"
+    "ParameterValue": "507781971948"
   },
   {
     "ParameterKey": "BucketOrigenNombre",
-    "ParameterValue": "prod-integrations-t1-batch-outputfiledirectory-817987897650"
+    "ParameterValue": "dev3-integrations-t1-batch-outputfiledirectory-507781971948"
   },
   {
     "ParameterKey": "RutaOrigenACH",
@@ -21,7 +21,7 @@
   },
   {
     "ParameterKey": "RutaDestinoACH",
-    "ParameterValue": "/ACH/"
+    "ParameterValue": "/RESPALDO_TEST_ACH/"
   },
   {
     "ParameterKey": "CrearBucketDestino",
@@ -65,7 +65,7 @@
   },
   {
     "ParameterKey": "ResourceNameSuffix",
-    "ParameterValue": ""
+    "ParameterValue": "#{resourceNameSuffix}#"
   },
   {
     "ParameterKey": "BucketCodigoLambda",
