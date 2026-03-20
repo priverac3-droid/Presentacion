@@ -25,6 +25,10 @@ variables:
   # Versión que se descargará en el agente temporalmente
   - name: versionPython
     value: '3.12'
+  # Bucket S3 para subir el ZIP de la Lambda (tarea S3 Upload / Replace Tokens en release).
+  # Sustituir por el bucket del ambiente o sobrescribir en la pestaña Variables del pipeline.
+  - name: bucketName
+    value: 'aws-useast1-qa-462297762050'
 
 resources:
   repositories:

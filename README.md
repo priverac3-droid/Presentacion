@@ -504,6 +504,12 @@ El pipeline `azure-pipelinePYTHON_v1_TRUNK.yml`:
 
 No despliega a AWS directamente. El despliegue lo hace el release clasico.
 
+Si agregas una tarea **Amazon S3 Upload** que use `$(bucketName)`, define la
+variable en el bloque `variables:` del YAML (como en este repo, p. ej.
+`bucketName: aws-useast1-qa-462297762050`) o en la pestaña **Variables** del
+pipeline en Azure DevOps. Sin eso, el build falla con “undefined variable
+bucketName”.
+
 ## 13. Notas operativas
 
 - Para dev3 los parametros vienen preparados para reutilizar el bucket destino existente
