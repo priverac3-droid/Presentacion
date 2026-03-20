@@ -482,13 +482,7 @@ Resources:
               executionArn: $.resources[0]
               result: $.detail.Result
               state: $.detail.State
-            InputTemplate: |
-              "ALERTA ACH
-              ------------------------------------------------
-              La tarea de respaldo reporto un error.
-              TaskExecutionArn: <executionArn>
-              Estado: <state>
-              Detalle: <result>"
+            InputTemplate: '"ALERTA ACH\n------------------------------------------------\nLa tarea de respaldo reporto un error.\nTaskExecutionArn: <executionArn>\nEstado: <state>\nDetalle: <result>"'
 
   LambdaExecutionRole:
     Type: AWS::IAM::Role
