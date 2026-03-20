@@ -360,6 +360,40 @@ S3 en `us-east-1`, o habilitar la opcion de auto-creacion de la tarea solo si la
 politica de la empresa lo permite. Verificar que el service connection asuma un
 rol con acceso a ese bucket.
 
+### Destino en QA: no existe el bucket o no aparece la carpeta `ACH/`
+
+Son cosas distintas:
+
+1. **Bucket transversal (datos)** — No es el bucket del ZIP de la Lambda. Con
+   `infra/parameters/params-qa03.json`, si `CrearBucketDestino=true` y
+   `BucketDestinoNombre` esta vacio, el template crea (nombre por convencion en
+   `us-east-1`):
+
+   ```text
+   b1-useast1-qa03-coreb-backuptransversal-462297762050
+   ```
+
+   Si ese bucket **no existe** en la cuenta `462297762050`, el stack de
+   CloudFormation **no se ha aplicado** en QA, fallo al crear el bucket, o se
+   desplego con `CrearBucketDestino=false` sin indicar un
+   `BucketDestinoNombre` real. Hay que revisar el estado del stack y los
+   parametros del release en QA.
+
+2. **“Carpeta” `ACH/`** — En S3 no hay directorios; `ACH/` es un **prefijo**. La
+   consola solo muestra esa ruta despues del **primer objeto** bajo
+   `ACH/...` (por ejemplo tras una ejecucion exitosa de DataSync) o si alguien
+   sube un marcador vacio:
+
+   ```bash
+   aws s3api put-object \
+     --bucket b1-useast1-qa03-coreb-backuptransversal-462297762050 \
+     --key ACH/.keep \
+     --body ""
+   ```
+
+   Hasta entonces puede parecer que “no existe la carpeta de destino” aunque el
+   bucket y la ubicacion DataSync esten bien.
+
 ### Estructura esperada del traspaso
 
 La expectativa funcional correcta es:
