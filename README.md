@@ -360,6 +360,32 @@ S3 en `us-east-1`, o habilitar la opcion de auto-creacion de la tarea solo si la
 politica de la empresa lo permite. Verificar que el service connection asuma un
 rol con acceso a ese bucket.
 
+#### Ejemplo: log con `aws-useast1-qa-462297762050` y mismo error
+
+Ese nombre ya apunta a **QA** (cuenta `462297762050`). El mensaje indica que el
+bucket **no existe todavía** en AWS o que el rol del service connection **no**
+tiene permiso sobre él (la tarea también hace `HeadBucket`).
+
+**Opción A — Crear el bucket una vez** en la cuenta y region del release
+(`us-east-1`), por consola S3 o CLI:
+
+```bash
+aws s3 mb s3://aws-useast1-qa-462297762050 --region us-east-1
+```
+
+**Opción B — Auto-create**: en la tarea **Amazon S3 Upload**, activar la opción
+para **crear el bucket si no existe** (solo si gobierno de seguridad lo permite).
+
+**Opción C — Permisos**: en IAM, al rol que asume el service connection, añadir
+política mínima sobre ese bucket, por ejemplo:
+
+- `s3:ListBucket` en `arn:aws:s3:::aws-useast1-qa-462297762050`
+- `s3:PutObject`, `s3:AbortMultipartUpload`, `s3:DeleteObject` (si aplica) en
+  `arn:aws:s3:::aws-useast1-qa-462297762050/*`
+
+Sin bucket creado o sin `HeadBucket`/`PutObject`, la tarea fallará igual aunque
+el nombre sea correcto.
+
 ### Destino en QA: no existe el bucket o no aparece la carpeta `ACH/`
 
 Son cosas distintas:
