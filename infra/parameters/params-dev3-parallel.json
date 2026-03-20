@@ -13,7 +13,7 @@
   },
   {
     "ParameterKey": "RutaOrigenACH",
-    "ParameterValue": "/replication/ACH/"
+    "ParameterValue": "replication/ACH/"
   },
   {
     "ParameterKey": "EmailNotificaciones",
@@ -21,7 +21,7 @@
   },
   {
     "ParameterKey": "RutaDestinoACH",
-    "ParameterValue": "/RESPALDO_TEST_ACH/"
+    "ParameterValue": ""
   },
   {
     "ParameterKey": "CrearBucketDestino",
@@ -53,7 +53,7 @@
   },
   {
     "ParameterKey": "TaskReportSubdirectory",
-    "ParameterValue": "/reports/ach/"
+    "ParameterValue": "reports/ach/"
   },
   {
     "ParameterKey": "HabilitarObjectLock",

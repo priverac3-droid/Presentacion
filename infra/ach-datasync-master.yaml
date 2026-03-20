@@ -31,13 +31,15 @@ Parameters:
 
   RutaOrigenACH:
     Type: String
-    Default: /replication/ACH/
+    Default: replication/ACH/
     Description: Prefijo origen que contiene la data ACH.
 
   RutaDestinoACH:
     Type: String
-    Default: /ACH/
-    Description: Prefijo destino dentro del bucket transversal.
+    Default: ''
+    Description: >
+      Prefijo destino dentro del bucket transversal. Déjalo vacío para copiar
+      el contenido directamente en la raíz del bucket.
 
   CrearBucketDestino:
     Type: String
@@ -98,7 +100,7 @@ Parameters:
 
   TaskReportSubdirectory:
     Type: String
-    Default: /reports/ach/
+    Default: reports/ach/
     Description: Prefijo donde DataSync almacenara los task reports para auditoria.
 
   HabilitarObjectLock:
@@ -130,7 +132,10 @@ Conditions:
   CreateDestinationBucket: !Equals [!Ref CrearBucketDestino, 'true']
   HasExplicitDestinationBucketName: !Not [!Equals [!Ref BucketDestinoNombre, '']]
   HasDestinationBucketKmsKey: !Not [!Equals [!Ref BucketDestinoKmsKeyArn, '']]
+  HasDestinationSubdirectory: !Not [!Equals [!Ref RutaDestinoACH, '']]
   HasOrchestratorSecret: !Not [!Equals [!Ref OrchestratorSecretArn, '']]
+  HasSourceSubdirectory: !Not [!Equals [!Ref RutaOrigenACH, '']]
+  HasTaskReportSubdirectory: !Not [!Equals [!Ref TaskReportSubdirectory, '']]
   EnableDailyScheduleCondition: !Equals [!Ref EnableDailySchedule, 'true']
   EnableObjectLockOnNewBucket: !And
     - !Condition CreateDestinationBucket
@@ -315,7 +320,7 @@ Resources:
     Type: AWS::DataSync::LocationS3
     Properties:
       S3BucketArn: !Sub "arn:aws:s3:::${BucketOrigenNombre}"
-      Subdirectory: !Ref RutaOrigenACH
+      Subdirectory: !If [HasSourceSubdirectory, !Ref RutaOrigenACH, !Ref 'AWS::NoValue']
       S3Config:
         BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
       Tags:
@@ -335,7 +340,7 @@ Resources:
             - !Sub
               - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
               - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
-      Subdirectory: !Ref RutaDestinoACH
+      Subdirectory: !If [HasDestinationSubdirectory, !Ref RutaDestinoACH, !Ref 'AWS::NoValue']
       S3Config:
         BucketAccessRoleArn: !GetAtt DataSyncRole.Arn
       Tags:
@@ -372,7 +377,7 @@ Resources:
                   - !Sub
                     - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
                     - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
-            Subdirectory: !Ref TaskReportSubdirectory
+            Subdirectory: !If [HasTaskReportSubdirectory, !Ref TaskReportSubdirectory, !Ref 'AWS::NoValue']
         ObjectVersionIds: NONE
         OutputType: STANDARD
         Overrides:
@@ -416,7 +421,7 @@ Resources:
                   - !Sub
                     - "arn:aws:s3:::b1-${RegionShort}-${AmbienteDespliegue}${ResourceNameSuffix}-coreb-backuptransversal-${CuentaDestinoID}"
                     - RegionShort: !FindInMap [RegionMap, !Ref 'AWS::Region', ShortName]
-            Subdirectory: !Ref TaskReportSubdirectory
+            Subdirectory: !If [HasTaskReportSubdirectory, !Ref TaskReportSubdirectory, !Ref 'AWS::NoValue']
         ObjectVersionIds: NONE
         OutputType: STANDARD
         Overrides:
