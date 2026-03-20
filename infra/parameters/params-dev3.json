@@ -21,19 +21,27 @@
   },
   {
     "ParameterKey": "RutaDestinoACH",
-    "ParameterValue": ""
+    "ParameterValue": "ACH/"
   },
   {
     "ParameterKey": "CrearBucketDestino",
-    "ParameterValue": "true"
+    "ParameterValue": "false"
   },
   {
     "ParameterKey": "BucketDestinoNombre",
-    "ParameterValue": ""
+    "ParameterValue": "b1-useast1-dev3-coreb-backuptransversal-507781971948"
   },
   {
     "ParameterKey": "BucketDestinoKmsKeyArn",
     "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "DeleteTransferredSourceObjects",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "ManifestSubdirectory",
+    "ParameterValue": "_datasync/manifests/"
   },
   {
     "ParameterKey": "ScheduleExpressionDaily",
@@ -53,7 +61,11 @@
   },
   {
     "ParameterKey": "TaskReportSubdirectory",
-    "ParameterValue": "reports/ach/"
+    "ParameterValue": "_datasync/task-reports/"
+  },
+  {
+    "ParameterKey": "TransferLastModifiedBefore",
+    "ParameterValue": "2026-02-01T00:00:00Z"
   },
   {
     "ParameterKey": "HabilitarObjectLock",
